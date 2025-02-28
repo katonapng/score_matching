@@ -62,8 +62,5 @@ python run_experiment_poisson.py
 ## References
 - Hyvärinen, A. "Estimation of Non-Normalized Statistical Models by Score Matching."
 
-## License
-This project is released under the MIT License.
-
 ---
 For any questions or contributions, feel free to open an issue or submit a pull request!
