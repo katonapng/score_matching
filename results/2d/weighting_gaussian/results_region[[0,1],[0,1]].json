@@ -1,0 +1,32 @@
+{
+    "parameters": {
+        "dimensions": 2,
+        "weighting": true,
+        "kappa": 1000,
+        "scale": 0.5,
+        "num_samples": 100,
+        "train_ratio": 0.8,
+        "batch_size": 32,
+        "epochs": 100,
+        "p": null,
+        "learning_rate": 0.001,
+        "weight_function": "gaussian",
+        "output_json": "results/2d/weighting_gaussian/results_region[[0,1],[0,1]].json",
+        "output_image": "results/2d/weighting_gaussian/output_plot_region[[0,1],[0,1]].png",
+        "region": [
+            [
+                0,
+                1
+            ],
+            [
+                0,
+                1
+            ]
+        ]
+    },
+    "metrics": {
+        "smd": null,
+        "r2": 0.9682125717401504,
+        "mse": 0.0025491873536194996
+    }
+}

@@ -1,0 +1,32 @@
+{
+    "parameters": {
+        "dimensions": 2,
+        "weighting": true,
+        "kappa": 1000,
+        "scale": 0.5,
+        "region": [
+            [
+                -0.5,
+                0.5
+            ],
+            [
+                -0.5,
+                0.5
+            ]
+        ],
+        "num_samples": 100,
+        "train_ratio": 0.8,
+        "batch_size": 64,
+        "epochs": 100,
+        "learning_rate": 0.0001,
+        "p": 0.05,
+        "weight_function": "bump",
+        "output_json": "results/2d/weighting/results_p0.05_region[[-0.5,0.5],[-0.5,0.5]].json",
+        "output_image": "results/2d/weighting/output_plot_p0.05_region[[-0.5,0.5],[-0.5,0.5]].png"
+    },
+    "metrics": {
+        "smd": null,
+        "r2": 0.43927771747112276,
+        "mse": 0.029159337727896924
+    }
+}

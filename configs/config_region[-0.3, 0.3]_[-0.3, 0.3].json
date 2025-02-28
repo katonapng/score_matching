@@ -1,0 +1,25 @@
+{
+    "dimensions": 2,
+    "weighting": false,
+    "kappa": 1000,
+    "scale": 0.5,
+    "num_samples": 100,
+    "train_ratio": 0.8,
+    "batch_size": 32,
+    "epochs": 100,
+    "p": null,
+    "learning_rate": 0.001,
+    "weight_function": "gaussian",
+    "output_json": "results_region[-0.3, 0.3]_[-0.3, 0.3].json",
+    "output_image": "output_region[-0.3, 0.3]_[-0.3, 0.3].png",
+    "region": [
+        [
+            -0.3,
+            0.3
+        ],
+        [
+            -0.3,
+            0.3
+        ]
+    ]
+}

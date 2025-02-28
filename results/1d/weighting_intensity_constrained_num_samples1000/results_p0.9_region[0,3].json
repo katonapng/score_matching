@@ -1,0 +1,25 @@
+{
+    "parameters": {
+        "dimensions": 1,
+        "weighting": true,
+        "kappa": 100,
+        "scale": 0.5,
+        "region": [
+            0,
+            3
+        ],
+        "num_samples": 1000,
+        "train_ratio": 0.8,
+        "batch_size": 64,
+        "epochs": 100,
+        "learning_rate": 0.0001,
+        "p": 0.9,
+        "output_json": "results/1d/weighting/results_p0.9_region[0,3].json",
+        "output_image": "results/1d/weighting/output_plot_p0.9_region[0,3].png"
+    },
+    "metrics": {
+        "smd": null,
+        "r2": -3.624232909679413,
+        "mse": 0.30820349430191113
+    }
+}
