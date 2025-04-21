@@ -166,3 +166,5 @@ cython_debug/
 outputs/
 data/
 plots/
+results/
+configs/

@@ -47,3 +47,12 @@ class FastTensorDataLoader:
 
     def __len__(self):
         return self.n_batches
+    
+    def random_sample(self, n=1):
+        """
+        Fetch a random sample (or multiple samples) from the dataset.
+        :param n: Number of random samples to return.
+        :return: A tuple of tensors with n samples.
+        """
+        indices = torch.randint(0, self.dataset_len, (n,))
+        return tuple(t[indices] for t in self.tensors)
