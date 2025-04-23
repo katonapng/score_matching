@@ -7,7 +7,7 @@ from functools import partial
 import numpy as np
 import optuna
 
-from metrics import compute_mse_r2
+from metrics import compute_smd
 from models import Poisson_NN, optimize_nn_with_optuna
 from utils import generate_training_data_poisson
 from weight_functions import (distance_window, distance_window_derivative,
@@ -45,7 +45,7 @@ def objective(trial, args):
             trial=trial,
         )
 
-        _, _, smd = compute_mse_r2(test, model, trial_args)
+        smd = compute_smd(test, model, trial_args)
         smd_scores.append(smd)
 
     # Return the average SMD across all regions (can be weighted if needed)

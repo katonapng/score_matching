@@ -32,6 +32,8 @@ base_config = {
     "dist_params": {"n_expected": 100, "scale": 0.5},
     "hidden_dims": [32],
     "learning_rate": 1e-02,
+    "plot_gradients": True,
+    # "epochs": 1000
 }
 
 # for percent in percent_values:
@@ -41,6 +43,7 @@ for region in region_values:
     n_layers = len(config["hidden_dims"]) + 1
     dims_str = "_".join(str(d) for d in config["hidden_dims"])
     config["folder_suffix"] = f"{n_layers}_layers_{dims_str}_neurons"
+    config["folder_suffix"] += "_test"
     config["output_json"] = f"results_region{region[0]}_{region[1]}.json"
     config["output_image"] = f"output_region{region[0]}_{region[1]}.png"
 

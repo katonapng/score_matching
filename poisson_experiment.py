@@ -1,9 +1,10 @@
 import argparse
 import json
 import os
+import shutil
 import warnings
 
-from metrics import compute_mse_r2, plot_results
+from metrics import compute_smd, plot_results
 from models import Poisson_NN, optimize_nn
 from utils import generate_training_data_poisson
 from weight_functions import (distance_window, distance_window_derivative,
@@ -36,29 +37,32 @@ def check_file_existence(output_json, output_image):
 
 
 def generate_output_filenames(args):
-    base_path = "results/1d/" if args.dimensions == 1 else "results/2d/"
+    base_path = "results/1d" if args.dimensions == 1 else "results/2d"
 
     if args.weight_function is not None:
         weight_path = f"weighting_{args.weight_function}"
     else:
-        weight_path = "no_weighting/"
+        weight_path = "no_weighting"
 
     if args.folder_suffix:
         weight_path += f"_{args.folder_suffix}"
-    weight_path += "/"
 
-    # Create directory if it doesn't exist
-    full_path = base_path + weight_path
+    full_path = os.path.join(base_path, weight_path)
     os.makedirs(full_path, exist_ok=True)
 
     # Ensure region suffix formatting
-    region_suffix = f"_region{args.region}".replace(" ", "")
+    region_suffix = f"region{args.region}".replace(" ", "")
+    
+    # Create gradient dir specific to the region
+    gradient_dir = os.path.join(full_path, "gradients", region_suffix)
+    if os.path.exists(gradient_dir):
+        shutil.rmtree(gradient_dir)
+    os.makedirs(gradient_dir, exist_ok=True)
 
-    # Generate output filenames
-    output_json = f"{full_path}results{region_suffix}.json"
-    output_image = f"{full_path}output_plot{region_suffix}.png"
+    output_json = os.path.join(full_path, f"results_{region_suffix}.json")
+    output_image = os.path.join(full_path, f"output_plot_{region_suffix}.png")
 
-    return output_json, output_image
+    return output_json, output_image, gradient_dir
 
 
 def get_region_dimension(region):
@@ -70,7 +74,8 @@ def get_region_dimension(region):
 
 def main(args):
     args.dimensions = get_region_dimension(args.region)
-    args.output_json, args.output_image = generate_output_filenames(args)
+    args.output_json, args.output_image, args.gradient_dir = \
+        generate_output_filenames(args)
     check_file_existence(args.output_json, args.output_image)
 
     if args.weight_function == "gaussian":
@@ -100,7 +105,7 @@ def main(args):
 
     # Compute metrics
     print("Computing metrics...")
-    mse, r2, smd = compute_mse_r2(test, model, args)
+    smd = compute_smd(test, model, args)
 
     # Save metrics and parameters to JSON file
     if args.weight_function is not None:
@@ -108,7 +113,7 @@ def main(args):
         args.weight_derivative = args.weight_derivative.__name__
     output_data = {
         "parameters": vars(args),
-        "metrics": {"smd": smd, "r2": r2, "mse": mse}
+        "metrics": {"smd": smd}
     }
     with open(args.output_json, "w") as f:
         json.dump(output_data, f, indent=4)
@@ -165,7 +170,7 @@ if __name__ == "__main__":
         "--hidden_dims",
         default=[8],
         type=list,
-        help="List of hidden dimensions for tanh layers for the neural network",
+        help="List of hidden dimensions for tanh layers of the neural network",
     )
     parser.add_argument(
         "--percent",
@@ -180,6 +185,7 @@ if __name__ == "__main__":
     parser.add_argument("--learning_rate", default=1e-3, type=float)
     parser.add_argument("--output_json", default="result.json", type=str)
     parser.add_argument("--output_image", default="output_plot.png", type=str)
+    parser.add_argument("--plot_gradients", default=False, type=str)
 
     args = parser.parse_args()
 

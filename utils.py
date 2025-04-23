@@ -1,7 +1,10 @@
 import itertools
 
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from matplotlib import cm, colors
+from PIL import Image
 from scipy.integrate import nquad
 from torch.nn.utils.rnn import pad_sequence
 
@@ -198,3 +201,111 @@ def generate_training_data_poisson(args):
     )
 
     return train_loader, test_loader
+
+
+def get_real_poisson_gradient(points, kappa, scale):
+    """
+    Compute the gradient of the log intensity function:
+        ∇ log λ(x) = -2x / s^2
+
+    Parameters:
+    - points: torch.Tensor of shape (N, d)
+    - scale: float, Gaussian scale parameter
+
+    Returns:
+    - gradient: torch.Tensor of shape (N, d)
+    """
+    return -2 * points / scale**2
+
+
+def save_gradients_as_gif(frames, save_path='gradients.gif'):
+    """
+    Saves the collected gradient frames as a GIF using Pillow.
+
+    Args:
+        frames (list): List of Image objects representing the frames.
+        save_path (str): Path to save the GIF file.
+    """
+    frames[0].save(
+        save_path, save_all=True, append_images=frames[1:], duration=500,
+        loop=0,
+    )
+
+
+def visualize_gradients(model, args, epoch, frames):
+    (xmin, xmax), (ymin, ymax) = args.region
+    y_grid = np.linspace(xmin, xmax, 20)
+    x_grid = np.linspace(ymin, ymax, 20)
+    X, Y = np.meshgrid(x_grid, y_grid)
+    grid_points = torch.tensor(
+        np.vstack([X.ravel(), Y.ravel()]).T, dtype=torch.float32,
+    )
+
+    # Get real and predicted gradients
+    real_gradient = get_real_poisson_gradient(
+        grid_points, args.kappa, args.dist_params.get("scale"),
+    )
+    predicted_gradient = model.compute_psi(grid_points)[0]
+
+    real_grad_magnitude = torch.norm(real_gradient, dim=1)
+    pred_grad_magnitude = torch.norm(predicted_gradient, dim=1)
+
+    # Normalize the gradients and apply a scaling factor
+    scaling_factor = 0.1
+    scaled_real_gradient = (
+        real_gradient / real_grad_magnitude.view(-1, 1)
+    ) * scaling_factor
+    scaled_predicted_gradient = (
+        predicted_gradient / pred_grad_magnitude.view(-1, 1)
+    ) * scaling_factor
+
+    norm = colors.Normalize(
+        vmin=real_grad_magnitude.min(), vmax=real_grad_magnitude.max()
+    )
+    cmap = cm.viridis
+
+    # Get log density values (assuming model.forward or similar)
+    log_density = model.forward(grid_points)
+    log_density_min = log_density.min().item()
+    log_density_max = log_density.max().item()
+
+    # Create the figure with subplots
+    fig, ax = plt.subplots(1, 2, figsize=(12, 6))
+
+    # Real intensity gradient
+    ax[0].quiver(
+        X, Y, scaled_real_gradient[:, 0].detach().numpy(),
+        scaled_real_gradient[:, 1].detach().numpy(),
+        angles='xy', scale_units='xy', scale=1,
+        color=cmap(norm(real_grad_magnitude.detach().numpy())))
+    ax[0].set_title('Real Intensity Gradient')
+    ax[0].set_xlabel('X')
+    ax[0].set_ylabel('Y')
+
+    # Predicted intensity gradient
+    ax[1].quiver(
+        X, Y, scaled_predicted_gradient[:, 0].detach().numpy(),
+        scaled_predicted_gradient[:, 1].detach().numpy(),
+        angles='xy', scale_units='xy', scale=1,
+        color=cmap(norm(pred_grad_magnitude.detach().numpy()))
+    )
+    ax[1].set_title('Predicted Intensity Gradient')
+    ax[1].set_xlabel('X')
+    ax[1].set_ylabel('Y')
+
+    # Add log density values as text
+    ax[1].text(
+        0.5, 1.05, 
+        f'Log Density Min: {log_density_min:.2f}, Max: {log_density_max:.2f}',
+        ha='center', va='bottom', transform=ax[1].transAxes, fontsize=10,
+    )
+
+    plt.tight_layout()
+
+    frame_filename = f"{args.gradient_dir}/epoch_{epoch}.png"
+    plt.savefig(frame_filename)
+    plt.close(fig)
+
+    # Open the saved image and append to the frames list
+    image = Image.open(frame_filename)
+    frames.append(image)

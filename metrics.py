@@ -2,7 +2,6 @@ import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from sklearn.metrics import mean_squared_error, r2_score
 
 from models import WindowParams
 from utils import remove_trailing_zeros
@@ -26,9 +25,7 @@ def calculate_score_matching_difference(intensity_real, intensity_pred, dim):
     return np.sum((gradient_real - gradient_pred) ** 2).astype(np.float64)
 
 
-def compute_mse_r2(loader_test, model, args):
-    mse_list = []
-    r2_list = []
+def compute_smd(loader_test, model, args):
     smd_list = []
 
     kappa = args.kappa
@@ -41,43 +38,36 @@ def compute_mse_r2(loader_test, model, args):
             if args.dimensions == 1:
                 x_test = x_test[:, 0].unsqueeze(1)
                 lower, upper = args.region
-                mask = (x_test >= lower) & (x_test <= upper)
-                x_test = x_test[mask].unsqueeze(1)
-                intensity_real = kappa * torch.exp(-x_test**2 / scale**2)
-                intensity_pred = model(x_test).detach()
+                region_mask = (x_test >= lower) & (x_test <= upper)
+                x_test_filtered = x_test[region_mask].unsqueeze(1)
+                intensity_real = kappa * torch.exp(-x_test_filtered**2 / scale**2)
+                intensity_pred = torch.exp(model(x_test_filtered).detach())
             else:
                 (x_lower, x_upper), (y_lower, y_upper) = args.region
-                # Mask to keep only points within the original region
-                mask = (
+                region_mask = (
                     (x_test[:, 0] >= x_lower) & (x_test[:, 0] <= x_upper)
                     & (x_test[:, 1] >= y_lower) & (x_test[:, 1] <= y_upper)
                 )
-                x_test_filtered = x_test[mask]
+                x_test_filtered = x_test[region_mask]
                 intensity_real = kappa * np.exp(
                     -(
                         x_test_filtered[:, 0]**2 + x_test_filtered[:, 1]**2
                     ) / scale**2
                 )
-                intensity_pred = model(
-                    torch.tensor(x_test_filtered[:, :-1], dtype=torch.float32)
-                ).squeeze(-1).detach()
-            
+                intensity_pred = torch.exp(model(
+                    torch.tensor(x_test_filtered[:, :-1], dtype=torch.float32),
+                )).squeeze(-1).detach()
+
             intensity_pred /= torch.max(intensity_pred)
             intensity_real /= torch.max(intensity_real)
 
-            mse = mean_squared_error(intensity_real, intensity_pred)
-            r2 = r2_score(
-                np.asarray(intensity_real), np.asarray(intensity_pred)
-            )
             smd = calculate_score_matching_difference(
                 intensity_real, intensity_pred, args.dimensions,
             )
 
             smd_list.append(smd)
-            mse_list.append(mse)
-            r2_list.append(r2)
 
-    return np.mean(mse_list), np.mean(r2_list), np.mean(smd_list)
+    return np.mean(smd_list)
 
 
 def plot_results(args, model, test_loader):
@@ -94,8 +84,9 @@ def plot_results(args, model, test_loader):
         x_min, x_max = x.min(), x.max()
         x_lin = np.linspace(args.region[0], args.region[1], 100)
         intensity_pred = model(
-            torch.tensor(x_lin[:, None], dtype=torch.float32)
+            torch.tensor(x_lin[:, None], dtype=torch.float32),
         ).squeeze().detach()
+        intensity_pred = torch.exp(intensity_pred)
 
         def mirrored_intensity(x, a, b, kappa, scale):
             length = b - a
@@ -183,8 +174,9 @@ def plot_results(args, model, test_loader):
         xx, yy = np.meshgrid(x_lin, y_lin)
         grid_points = np.stack([xx.ravel(), yy.ravel()], axis=1)
         intensity_pred = model(
-            torch.tensor(grid_points, dtype=torch.float32)
+            torch.tensor(grid_points, dtype=torch.float32),
         ).detach()
+        intensity_pred = torch.exp(intensity_pred)
         intensity_pred = intensity_pred.reshape(xx.shape)
         intensity_real = kappa * np.exp(-(xx**2 + yy**2) / scale**2)
 
@@ -204,6 +196,14 @@ def plot_results(args, model, test_loader):
                 - (intensity_real / np.max(intensity_real))
             )
         ]
+        # plots = [
+        #     intensity_pred,
+        #     intensity_real,
+        #     abs(
+        #         (intensity_pred / torch.max(intensity_pred))
+        #         - (intensity_real / np.max(intensity_real))
+        #     )
+        # ]
         cmaps = ['viridis', 'viridis', 'cividis']
 
         (xmin, xmax), (ymin, ymax) = args.region
