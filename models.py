@@ -43,8 +43,16 @@ class Poisson_NN(nn.Module):
             layers.append(nn.Tanh())
             last_dim = h_dim
 
-        layers.append(nn.Linear(last_dim, output_dim, bias=False))
+        layers.append(nn.Linear(last_dim, output_dim))
         self.network = nn.Sequential(*layers)
+
+        self._initialize_weights()
+
+    def _initialize_weights(self):
+        """Initialize weights using Kaiming Uniform (good for tanh)."""
+        for m in self.network:
+            if isinstance(m, nn.Linear):
+                nn.init.kaiming_uniform_(m.weight, nonlinearity='tanh')
 
     def forward(self, x):
         log_intensity = self.network(x)
@@ -90,10 +98,10 @@ class Poisson_NN(nn.Module):
         total_loss = 0.5 * norm_squared + divergence + weight # + 1e-2*torch.mean(intensity**2)
         total_loss = total_loss.sum(dim=-1) / lengths
 
-        batch_size = x.size(0)
-        total_loss = total_loss.mean() / batch_size
+        # batch_size = x.size(0)
+        # total_loss = total_loss.mean() / batch_size
 
-        return total_loss
+        return total_loss.mean()
 
 
 def optimize_nn(loader_train, nn_model, args):
@@ -146,9 +154,12 @@ def optimize_nn(loader_train, nn_model, args):
         args, input_dim=args.dimensions, hidden_dims=args.hidden_dims
     )
 
-    optimizer = torch.optim.Adam(
+    optimizer = torch.optim.Rprop(
         model.parameters(), lr=args.learning_rate,
     )
+    # optimizer = torch.optim.Adam(
+    #     model.parameters(), lr=args.learning_rate, amsgrad=True,
+    # )
 
     frames = []
     train_losses = []

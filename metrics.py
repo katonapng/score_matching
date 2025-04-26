@@ -40,7 +40,9 @@ def compute_smd(loader_test, model, args):
                 lower, upper = args.region
                 region_mask = (x_test >= lower) & (x_test <= upper)
                 x_test_filtered = x_test[region_mask].unsqueeze(1)
-                intensity_real = kappa * torch.exp(-x_test_filtered**2 / scale**2)
+                intensity_real = kappa * torch.exp(
+                    -x_test_filtered**2 / scale**2
+                )
                 intensity_pred = torch.exp(model(x_test_filtered).detach())
             else:
                 (x_lower, x_upper), (y_lower, y_upper) = args.region
