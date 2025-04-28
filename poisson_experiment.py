@@ -4,7 +4,7 @@ import os
 import shutil
 import warnings
 
-from metrics import compute_smd, plot_results
+from metrics import compute_smd, plot_results, plot_loss_smd
 from models import Poisson_NN, optimize_nn
 from utils import generate_training_data_poisson
 from weight_functions import (distance_window, distance_window_derivative,
@@ -52,17 +52,23 @@ def generate_output_filenames(args):
 
     # Ensure region suffix formatting
     region_suffix = f"region{args.region}".replace(" ", "")
-    
+
     # Create gradient dir specific to the region
     gradient_dir = os.path.join(full_path, "gradients", region_suffix)
     if os.path.exists(gradient_dir):
         shutil.rmtree(gradient_dir)
     os.makedirs(gradient_dir, exist_ok=True)
 
+    # Create losses folder
+    losses_dir = os.path.join(full_path, "losses")
+    os.makedirs(losses_dir, exist_ok=True)
+
+    # Define output paths
     output_json = os.path.join(full_path, f"results_{region_suffix}.json")
     output_image = os.path.join(full_path, f"output_plot_{region_suffix}.png")
+    loss_image = os.path.join(losses_dir, f"loss_plot_{region_suffix}.png")
 
-    return output_json, output_image, gradient_dir
+    return output_json, output_image, gradient_dir, loss_image
 
 
 def get_region_dimension(region):
@@ -74,7 +80,7 @@ def get_region_dimension(region):
 
 def main(args):
     args.dimensions = get_region_dimension(args.region)
-    args.output_json, args.output_image, args.gradient_dir = \
+    args.output_json, args.output_image, args.gradient_dir, args.loss_image = \
         generate_output_filenames(args)
     check_file_existence(args.output_json, args.output_image)
 
@@ -88,15 +94,21 @@ def main(args):
         args.weight_function = None
         args.weight_derivative = None
 
-    train, test = generate_training_data_poisson(args)
+    train, val, test = generate_training_data_poisson(args)
 
     # Train model with progress tracking
     print("Starting training...")
-    model, _ = optimize_nn(
+    model, train_losses, val_smds = optimize_nn(
         args=args,
         loader_train=train,
+        loader_val=val,
         nn_model=Poisson_NN,
     )
+
+    # Generate and save training loss and validation smd plot
+    print("Generating training loss and validation SMD plot...")
+    plot_loss_smd(train_losses, val_smds, args)
+    print("Plot saved to", args.loss_image)
 
     # Generate and save plot
     print("Generating plot...")
@@ -105,7 +117,7 @@ def main(args):
 
     # Compute metrics
     print("Computing metrics...")
-    smd = compute_smd(test, model, args)
+    avg_smd, avg_intensity_stats = compute_smd(test, model, args)
 
     # Save metrics and parameters to JSON file
     if args.weight_function is not None:
@@ -113,7 +125,7 @@ def main(args):
         args.weight_derivative = args.weight_derivative.__name__
     output_data = {
         "parameters": vars(args),
-        "metrics": {"smd": smd}
+        "metrics": {"avg_smd": avg_smd, "intensity_stats": avg_intensity_stats}
     }
     with open(args.output_json, "w") as f:
         json.dump(output_data, f, indent=4)
@@ -178,14 +190,21 @@ if __name__ == "__main__":
         type=float,
         help="Percent of the domain to be used for distance weighting",
     )
-    
+    parser.add_argument(
+        "--optimizer",
+        default="rprop",
+        choices=["adam", "rprop"],
+        help="Optimizer to use: ['adam', 'rprop']",
+    )
     parser.add_argument("--train_ratio", default=0.8, type=float)
+    parser.add_argument("--val_ratio", default=0.1, type=float)
     parser.add_argument("--batch_size", default=32, type=int)
+    parser.add_argument("--patience", default=10, type=int)
     parser.add_argument("--epochs", default=200, type=int)
     parser.add_argument("--learning_rate", default=1e-3, type=float)
-    parser.add_argument("--output_json", default="result.json", type=str)
-    parser.add_argument("--output_image", default="output_plot.png", type=str)
     parser.add_argument("--plot_gradients", default=False, type=str)
+    parser.add_argument("--l2_regularization", default=True, type=str)
+    parser.add_argument("--optuna", default=False, type=str)
 
     args = parser.parse_args()
 

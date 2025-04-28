@@ -186,21 +186,29 @@ def generate_training_data_poisson(args):
 
     samples_torch = [torch.tensor(s, dtype=torch.float32) for s in samples]
     X = pad_sequence(samples_torch, batch_first=True, padding_value=0)
+
     lengths = torch.tensor([len(s) for s in samples_torch], dtype=torch.int64)
     lengths_expanded = lengths.unsqueeze(-1).expand(-1, X.shape[1])
     X = torch.cat((X, lengths_expanded.unsqueeze(-1)), dim=-1)
 
-    train_size = int(args.train_ratio * len(X))
-    X_train, X_test = X[:train_size], X[train_size:]
+    # Split into train/val/test
+    total_size = len(X)
+    train_size = int(args.train_ratio * total_size)
+    val_size = int(args.val_ratio * total_size)
+    test_size = total_size - train_size - val_size
+    X_train, X_val, X_test = torch.split(X, [train_size, val_size, test_size])
 
     train_loader = FastTensorDataLoader(
         X_train, batch_size=args.batch_size, shuffle=False
+    )
+    val_loader = FastTensorDataLoader(
+        X_val, batch_size=args.batch_size, shuffle=False
     )
     test_loader = FastTensorDataLoader(
         X_test, batch_size=args.batch_size, shuffle=False
     )
 
-    return train_loader, test_loader
+    return train_loader, val_loader, test_loader
 
 
 def get_real_poisson_gradient(points, kappa, scale):
@@ -259,10 +267,16 @@ def visualize_gradients(model, args, epoch, frames):
         predicted_gradient / pred_grad_magnitude.view(-1, 1)
     ) * scaling_factor
 
-    norm = colors.Normalize(
-        vmin=real_grad_magnitude.min(), vmax=real_grad_magnitude.max()
-    )
+    # Create a colormap and normalization
+    norm_real = colors.Normalize(vmin=real_grad_magnitude.min().item(), vmax=real_grad_magnitude.max().item())
+    norm_pred = colors.Normalize(vmin=pred_grad_magnitude.min().item(), vmax=pred_grad_magnitude.max().item())
     cmap = cm.viridis
+
+    # Create a ScalarMappable to link the colorbar to the actual gradient magnitudes
+    sm_real = cm.ScalarMappable(cmap=cmap, norm=norm_real)
+    sm_real.set_array([])  # Empty array for the ScalarMappable
+    sm_pred = cm.ScalarMappable(cmap=cmap, norm=norm_pred)
+    sm_pred.set_array([])
 
     # Get log density values (assuming model.forward or similar)
     log_density = model.forward(grid_points)
@@ -277,7 +291,8 @@ def visualize_gradients(model, args, epoch, frames):
         X, Y, scaled_real_gradient[:, 0].detach().numpy(),
         scaled_real_gradient[:, 1].detach().numpy(),
         angles='xy', scale_units='xy', scale=1,
-        color=cmap(norm(real_grad_magnitude.detach().numpy())))
+        color=[sm_real.to_rgba(val) for val in real_grad_magnitude.detach().numpy()]
+    )
     ax[0].set_title('Real Intensity Gradient')
     ax[0].set_xlabel('X')
     ax[0].set_ylabel('Y')
@@ -287,11 +302,15 @@ def visualize_gradients(model, args, epoch, frames):
         X, Y, scaled_predicted_gradient[:, 0].detach().numpy(),
         scaled_predicted_gradient[:, 1].detach().numpy(),
         angles='xy', scale_units='xy', scale=1,
-        color=cmap(norm(pred_grad_magnitude.detach().numpy()))
+        color=[sm_pred.to_rgba(val) for val in pred_grad_magnitude.detach().numpy()]
     )
     ax[1].set_title('Predicted Intensity Gradient')
     ax[1].set_xlabel('X')
     ax[1].set_ylabel('Y')
+
+    # Add colorbars using the ScalarMappable
+    fig.colorbar(sm_real, ax=ax[0], orientation='vertical', label='Real Gradient Magnitude')
+    fig.colorbar(sm_pred, ax=ax[1], orientation='vertical', label='Predicted Gradient Magnitude')
 
     # Add log density values as text
     ax[1].text(
@@ -299,6 +318,8 @@ def visualize_gradients(model, args, epoch, frames):
         f'Log Density Min: {log_density_min:.2f}, Max: {log_density_max:.2f}',
         ha='center', va='bottom', transform=ax[1].transAxes, fontsize=10,
     )
+    ax[0].set_aspect('equal', adjustable='box')
+    ax[1].set_aspect('equal', adjustable='box')
 
     plt.tight_layout()
 
