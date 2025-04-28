@@ -8,7 +8,7 @@ import numpy as np
 import optuna
 
 from metrics import compute_smd
-from models import Poisson_NN, optimize_nn_with_optuna
+from models import Poisson_NN, optimize_nn
 from utils import generate_training_data_poisson
 from weight_functions import (distance_window, distance_window_derivative,
                               gaussian_window, gaussian_window_derivative)
@@ -29,23 +29,31 @@ def objective(trial, args):
     smd_scores = []
 
     for region in args.regions:
+        def get_region_dimension(region):
+            if isinstance(region[0], list):
+                return len(region)
+            else:
+                return 1
+
+        args.dimensions = get_region_dimension(region)
         trial_args = copy.deepcopy(args)
         trial_args.region = region
-        train, test, _ = generate_training_data_poisson(trial_args)
+        train, val, test = generate_training_data_poisson(trial_args)
 
         def model_fn(mod_args, input_dim, hidden_dims):
             return Poisson_NN(
                 mod_args, input_dim=input_dim, hidden_dims=hidden_dims,
             )
 
-        model, _ = optimize_nn_with_optuna(
+        model, _, _ = optimize_nn(
             loader_train=train,
+            loader_val=val,
             nn_model=model_fn,
             args=trial_args,
             trial=trial,
         )
 
-        smd = compute_smd(test, model, trial_args)
+        smd, _ = compute_smd(test, model, trial_args)
         smd_scores.append(smd)
 
     # Return the average SMD across all regions (can be weighted if needed)
@@ -89,12 +97,7 @@ if __name__ == "__main__":
         help="Path to JSON file with arguments",
     )
     parser.add_argument("--dimensions", type=int, choices=[1, 2])
-    parser.add_argument(
-        "--model",
-        type=int,
-        choices=["Poisson_NN"],
-        help="Model to train: [Poisson_NN]",
-    )
+
     parser.add_argument("--weighting", default=False, type=bool)
     parser.add_argument(
         "--weight_function",
@@ -113,8 +116,14 @@ if __name__ == "__main__":
     parser.add_argument("--weight_derivative", default=None, type=str)
     parser.add_argument("--num_samples", default=100, type=int)
     parser.add_argument("--train_ratio", default=0.8, type=float)
+    parser.add_argument("--val_ratio", default=0.1, type=float)
     parser.add_argument("--batch_size", default=32, type=int)
     parser.add_argument("--epochs", default=100, type=int)
+    parser.add_argument("--learning_rate", default=1e-3, type=float)
+    parser.add_argument("--patience", default=10, type=int)
+    parser.add_argument("--plot_gradients", default=False, type=str)
+    parser.add_argument("--l2_regularization", default=True, type=str)
+    parser.add_argument("--optuna", default=False, type=str)
     parser.add_argument(
         "--percent",
         default=10.0,
