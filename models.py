@@ -15,16 +15,6 @@ class WindowParams:
     percent: float = None
 
 
-class ScaledTanh(nn.Module):
-    def __init__(self, a, b):
-        super().__init__()
-        self.a = a
-        self.b = b
-
-    def forward(self, x):
-        return 0.5 * (self.a + self.b) + 0.5 * (self.b - self.a) * torch.tanh(x)
-
-
 class Poisson_NN(nn.Module):
     def __init__(self, args, input_dim, hidden_dims, output_dim=1):
         super().__init__()
@@ -95,16 +85,13 @@ class Poisson_NN(nn.Module):
         norm_squared = norm_squared * mask
         weight = weight * mask
 
-        total_loss = 0.5 * norm_squared + divergence + weight # + 1e-2*torch.mean(intensity**2)
+        total_loss = 0.5 * norm_squared + divergence + weight
         total_loss = total_loss.sum(dim=-1) / lengths
-
-        # batch_size = x.size(0)
-        # total_loss = total_loss.mean() / batch_size
 
         return total_loss.mean()
 
 
-def optimize_nn(loader_train, nn_model, args):
+def optimize_nn(loader_train, loader_val, nn_model, args, trial=None):
     """
     Optimizes the model parameters using gradient descent.
 
@@ -119,12 +106,13 @@ def optimize_nn(loader_train, nn_model, args):
             - list[float]: List of training loss values recorded per epoch.
     """
     def run_epoch(
-            loader, model, optimizer=None, total_samples=None
+            loader_train, loader_val, model, optimizer=None, total_samples=None
     ):
+        # Training phase
         model.train()
 
         loss_sum = 0.0
-        for X_batch in loader:
+        for X_batch in loader_train:
             x_data = X_batch[0]
 
             lengths = x_data[:, 0, -1].to(dtype=torch.int64)
@@ -138,43 +126,77 @@ def optimize_nn(loader_train, nn_model, args):
             loss = model.loss(padded_x, lengths, mask)
             loss.backward()
 
-            # l2_lambda = 1e-3
-            # l2_norm = sum(
-            #     p.pow(2.0).sum() for p in model.parameters() if p.requires_grad
-            # )
-            # loss = loss + l2_lambda * l2_norm
+            if args.l2_regularization:
+                l2_lambda = 1e-3
+                l2_norm = sum(
+                    p.pow(2.0).sum() for p in model.parameters()
+                    if p.requires_grad
+                )
+                loss = loss + l2_lambda * l2_norm
 
             optimizer.step()
 
             loss_sum += loss.item()
 
-        return loss_sum / total_samples if total_samples > 0 else 0.0
+        avg_train_loss = loss_sum / total_samples if total_samples > 0 else 0.0
 
+        # Validation phase
+        model.eval()
+        with torch.no_grad():
+            from metrics import compute_smd
+            avg_val_smd, _ = compute_smd(loader_val, model, args)
+
+        return avg_train_loss, avg_val_smd
+
+    if args.optuna:
+        # n_layers = trial.suggest_int("n_layers", 1, 4)
+        # args.hidden_dims = [
+        #     trial.suggest_int(
+        #         f"n_neurons_l{i}", 8, 32, step=8
+        #     ) for i in range(n_layers)
+        # ]
+        # args.learning_rate = trial.suggest_float(
+        #     "learning_rate", 1e-4, 1e-2, log=True,
+        # )
+        args.optimizer = trial.suggest_categorical(
+            'optimizer', ['adam', 'rprop']
+        )
     model = nn_model(
         args, input_dim=args.dimensions, hidden_dims=args.hidden_dims
     )
 
-    optimizer = torch.optim.Rprop(
-        model.parameters(), lr=args.learning_rate,
-    )
-    # optimizer = torch.optim.Adam(
-    #     model.parameters(), lr=args.learning_rate, amsgrad=True,
-    # )
+    if args.optimizer == "rprop":
+        optimizer = torch.optim.Rprop(
+            model.parameters(), lr=args.learning_rate,
+        )
+    if args.optimizer == "adam":
+        optimizer = torch.optim.Adam(
+            model.parameters(), lr=args.learning_rate,  # amsgrad=True,
+        )
 
     frames = []
-    train_losses = []
+    train_losses, val_smds = [], []
     train_samples = len(loader_train)
+    best_val_smd = float('inf')
+
+    patience = args.patience  # e.g., 10
+    wait = 0  # How many epochs since last improvement
+    delta = 0.0  # Minimal improvement to reset patience (optional)
+
+    best_val_smd = float('inf')
+    best_model_state = None
 
     pbar = tqdm(range(args.epochs), desc="Training", unit="epoch")
     for epoch in pbar:
         start_time = time.time()
 
-        # Training phase
-        avg_train_loss = run_epoch(
-            loader_train, model, optimizer,
+        # Training and Validation phase
+        avg_train_loss, avg_val_smd = run_epoch(
+            loader_train, loader_val, model, optimizer,
             total_samples=train_samples,
-            )
+        )
         train_losses.append(avg_train_loss)
+        val_smds.append(avg_val_smd)
 
         if args.plot_gradients and epoch % 5 == 0:
             visualize_gradients(model, args, epoch, frames)
@@ -182,54 +204,29 @@ def optimize_nn(loader_train, nn_model, args):
         elapsed_time = time.time() - start_time
         pbar.set_postfix({
             "Train Loss": f"{avg_train_loss:.4f}",
+            "Val SMD": f"{avg_val_smd:.6f}",
             "Time/Epoch": f"{elapsed_time:.2f}s",
-            "Region": f"{args.region}",
         })
+
+        # Early stopping check
+        if avg_val_smd < best_val_smd - delta:
+            best_val_smd = avg_val_smd
+            best_model_state = model.state_dict()
+            torch.save(best_model_state, 'best_model.pth')
+            wait = 0  # Reset patience counter
+        else:
+            wait += 1
+            if wait >= patience:
+                print(
+                    f"Early stopping at epoch {epoch} (no improvement for {patience} epochs)."
+                )
+                break
 
     if args.plot_gradients:
         save_gradients_as_gif(frames, f"{args.gradient_dir}/gradient.gif")
-    return model, train_losses
 
+    # Load best model
+    if best_model_state is not None:
+        model.load_state_dict(best_model_state)
 
-def optimize_nn_with_optuna(loader_train, nn_model, args, trial=None):
-    n_layers = trial.suggest_int("n_layers", 1, 4)
-    hidden_dims = [
-        trial.suggest_int(
-            f"n_neurons_l{i}", 8, 32, step=8
-        ) for i in range(n_layers)
-    ]
-    # learning_rate = trial.suggest_float(
-    #    "learning_rate", 1e-4, 1e-2, log=True,
-    # )
-    learning_rate = 1e-2
-    input_dim = next(iter(loader_train))[0][:, :, :-1].float().shape[-1]
-    model = nn_model(args, input_dim=input_dim, hidden_dims=hidden_dims)
-
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-
-    def run_epoch(
-            loader, model, optimizer=None, total_samples=None
-    ):
-        model.train()
-        loss_sum = 0.0
-        for X_batch in loader:
-            x_data = X_batch[0]
-            optimizer.zero_grad()
-            loss = model.loss(x_data)
-            loss.backward()
-            optimizer.step()
-            loss_sum += loss.item()
-        return loss_sum / total_samples if total_samples > 0 else 0.0
-
-    train_losses = []
-    train_samples = len(loader_train)
-    pbar = tqdm(range(args.epochs), desc="Training", unit="epoch")
-    for _ in pbar:
-        avg_train_loss = run_epoch(
-            loader_train, model, optimizer,
-            total_samples=train_samples,
-        )
-        train_losses.append(avg_train_loss)
-        pbar.set_postfix({"Train Loss": f"{avg_train_loss:.4f}"})
-
-    return model, train_losses
+    return model, train_losses, val_smds
