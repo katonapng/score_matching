@@ -5,7 +5,7 @@ import shutil
 import warnings
 
 from metrics import compute_smd, plot_results, plot_loss_smd
-from models import Poisson_NN, optimize_nn
+from models import Poisson_SM, Poisson_MLE, optimize_nn
 from utils import generate_training_data_poisson
 from weight_functions import (distance_window, distance_window_derivative,
                               gaussian_window, gaussian_window_derivative)
@@ -96,13 +96,26 @@ def main(args):
 
     train, val, test = generate_training_data_poisson(args)
 
+    if args.model == "Poisson_SM":
+        model_class = Poisson_SM
+    elif args.model == "Poisson_MLE":
+        model_class = Poisson_MLE
+        if args.weight_function is not None:
+            raise ValueError(
+                "Weight function not supported for Poisson_MLE model."
+            )
+    else:
+        raise ValueError(
+            "Invalid model type. Choose 'Poisson_SM' or 'Poisson_MLE'."
+        )
+    
     # Train model with progress tracking
     print("Starting training...")
     model, train_losses, val_smds = optimize_nn(
         args=args,
         loader_train=train,
         loader_val=val,
-        nn_model=Poisson_NN,
+        nn_model=model_class,
     )
 
     # Generate and save training loss and validation smd plot
@@ -138,6 +151,13 @@ if __name__ == "__main__":
     warnings.filterwarnings("ignore", category=DeprecationWarning)
 
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="Poisson_SM",
+        choices=["Poisson_SM", "Poisson_MLE"],
+        help="Model to use: ['Poisson_SM', 'Poisson_MLE']",
+    )
     parser.add_argument(
         "--config",
         type=str,

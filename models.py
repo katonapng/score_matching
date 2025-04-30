@@ -15,7 +15,7 @@ class WindowParams:
     percent: float = None
 
 
-class Poisson_NN(nn.Module):
+class Poisson_SM(nn.Module):
     def __init__(self, args, input_dim, hidden_dims, output_dim=1):
         super().__init__()
         torch.manual_seed(123)
@@ -89,6 +89,89 @@ class Poisson_NN(nn.Module):
         total_loss = total_loss.sum(dim=-1) / lengths
 
         return total_loss.mean()
+
+
+class Poisson_MLE(nn.Module):
+    def __init__(self, args, input_dim, hidden_dims, output_dim=1):
+        super().__init__()
+        torch.manual_seed(123)
+        self.output_dim = output_dim
+        self.input_dim = input_dim
+        self.region = args.region
+        self.grid_steps = 100
+
+        layers = []
+        last_dim = input_dim
+        for h_dim in hidden_dims:
+            layers.append(nn.Linear(last_dim, h_dim))
+            layers.append(nn.Tanh())
+            last_dim = h_dim
+
+        layers.append(nn.Linear(last_dim, output_dim))
+        self.network = nn.Sequential(*layers)
+
+        self._initialize_weights()
+
+    def _initialize_weights(self):
+        """Initialize weights using Kaiming Uniform (good for tanh)."""
+        for m in self.network:
+            if isinstance(m, nn.Linear):
+                nn.init.kaiming_uniform_(m.weight, nonlinearity='tanh')
+
+    def forward(self, x):
+        log_intensity = self.network(x)
+        return log_intensity
+
+    def compute_integral(self):
+        """Numerical integration over the grid (1D or 2D)"""
+        # Create grid for 1D or 2D
+        if self.input_dim == 1:
+            x_range = torch.linspace(
+                self.region[0], self.region[1], steps=self.grid_steps
+            )
+            dx = (x_range[1] - x_range[0]).item()
+            grid = x_range.unsqueeze(1)  # Shape: (grid_steps, 1)
+
+            log_lambda = self.forward(grid)
+            lambda_vals = torch.exp(log_lambda).squeeze()
+
+            integral = torch.trapz(lambda_vals, dx=dx)
+        
+        elif self.input_dim == 2:
+            x_range = torch.linspace(
+                self.region[0][0], self.region[0][1], steps=self.grid_steps
+            )
+            y_range = torch.linspace(
+                self.region[1][0], self.region[1][1], steps=self.grid_steps
+            )
+            dx = (x_range[1] - x_range[0]).item()
+            dy = (y_range[1] - y_range[0]).item()
+
+            xx, yy = torch.meshgrid(x_range, y_range, indexing='ij')
+            grid = torch.stack([xx.reshape(-1), yy.reshape(-1)], dim=1)
+
+            log_lambda = self.forward(grid)
+            lambda_vals = torch.exp(log_lambda)
+
+            lambda_grid = lambda_vals.reshape(self.grid_steps, self.grid_steps)
+            integral = torch.trapz(
+                torch.trapz(lambda_grid, dx=dy, dim=1), dx=dx, dim=0
+            )
+
+        return integral
+
+    def loss(self, x_data, lengths, mask):
+        """Negative log-likelihood: -∑log λ(x_i) + ∫ λ(x) dx"""
+        log_lambda = self.forward(x_data)
+        log_lambda = log_lambda * mask.unsqueeze(-1)
+
+        log_likelihood = torch.sum(log_lambda)
+        log_likelihood = log_lambda.sum(dim=1).sum()
+
+        integral = self.compute_integral()
+
+        nll = -log_likelihood + integral * x_data.shape[0] 
+        return nll
 
 
 def optimize_nn(loader_train, loader_val, nn_model, args, trial=None):
