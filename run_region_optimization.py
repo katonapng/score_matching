@@ -25,15 +25,14 @@ region_values = [
 ]
 
 base_config = {
-    "model": "Poisson_NN",
-    "dimensions": 2,
-    "weighting": True,
     "weight_function": "distance",
     "mirror_boundary": False,
     "dist_params": {"n_expected": 100, "scale": 0.5},
     "n_trials": 25,
-    "study_name": "layer1_4_neuron8_32_optimization_parallel_2d_repeat",
-    "percent": 10.0,
+    "study_name": "optimizer",
+    "l2_regularization": False,
+    "optuna": True,
+    "hidden_dims": [32],
 }
 
 config = base_config.copy()

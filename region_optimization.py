@@ -8,7 +8,7 @@ import numpy as np
 import optuna
 
 from metrics import compute_smd
-from models import Poisson_NN, optimize_nn
+from models import Poisson_SM, optimize_nn
 from utils import generate_training_data_poisson
 from weight_functions import (distance_window, distance_window_derivative,
                               gaussian_window, gaussian_window_derivative)
@@ -41,7 +41,7 @@ def objective(trial, args):
         train, val, test = generate_training_data_poisson(trial_args)
 
         def model_fn(mod_args, input_dim, hidden_dims):
-            return Poisson_NN(
+            return Poisson_SM(
                 mod_args, input_dim=input_dim, hidden_dims=hidden_dims,
             )
 
