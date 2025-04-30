@@ -156,14 +156,22 @@ def plot_results(args, model, test_loader):
         if args.weight_function:
             plot_weight_function(x_lin, args.weight_function.__name__)
 
+        # Compute max and min before normalization
+        pred_max, pred_min = intensity_pred.max().item(), intensity_pred.min().item()
+        real_max, real_min = intensity_real.max().item(), intensity_real.min().item()
+
+        # Plot
         plt.plot(
-            x_lin, intensity_pred / intensity_pred.max(),
-            label='Predicted Intensity', color='blue'
+            x_lin, intensity_pred / pred_max,
+            label=f'Predicted Intensity\n(max={pred_max:.2f}, min={pred_min:.2f})',
+            color='blue'
         )
         plt.plot(
-            x_lin, intensity_real / intensity_real.max(),
-            label='True Intensity', color='green'
+            x_lin, intensity_real / real_max,
+            label=f'True Intensity\n(max={real_max:.2f}, min={real_min:.2f})',
+            color='green'
         )
+
         plt.scatter(
             x, np.zeros_like(x), c='red', s=10, alpha=0.6,
             label='Poisson Points',
@@ -178,13 +186,7 @@ def plot_results(args, model, test_loader):
 
         plt.xlabel(r'$x$', fontsize=12)
         plt.ylabel(fr'Intensity ($\kappa$ = {kappa:.2f})', fontsize=12)
-        plt.title(
-            (
-                f'Intensity (Predicted max={intensity_pred.max():.2f}, '
-                f'min={intensity_pred.min():.2f})'
-            ),
-            fontsize=12
-        )
+        plt.title("Normalized Intensities", fontsize=12)
         plt.grid(True, linestyle='--', alpha=0.5)
         plt.xlim(args.region[0], args.region[1])
         plt.legend()
@@ -230,7 +232,8 @@ def plot_results(args, model, test_loader):
 
             if args.mirror_boundary:
                 c = axs[i].imshow(
-                    plot_data, extent=[x_vals.min(), x_vals.max(), y_vals.min(), y_vals.max()],
+                    plot_data,
+                    extent=[x_vals.min(), x_vals.max(), y_vals.min(), y_vals.max()],
                     origin='lower', cmap=cmap, alpha=opacity_mask,
                     aspect='auto', norm=norm if i < 2 else None
                 )
@@ -272,7 +275,7 @@ def plot_results(args, model, test_loader):
     else:
         plot_2d(x)
 
-    plt.savefig(args.output_image)
+    plt.savefig(args.output_image, bbox_inches='tight')
     plt.close()
 
 
