@@ -1,10 +1,10 @@
 import json
 import warnings
 
-from metrics import calculate_metrics, plot_losses, plot_results
-from models import Poisson_MLE, Poisson_SM, optimize_nn
-from shared_args import get_shared_parser
-from utils import (check_file_existence, convert_to_native,
+from src.metrics import calculate_metrics, plot_losses, plot_results
+from src.models import Poisson_MLE, Poisson_SM, optimize_nn
+from src.shared_args import get_shared_parser
+from src.utils import (check_file_existence, convert_to_native,
                    generate_output_filenames, generate_training_data_poisson,
                    get_region_dimension, read_args_from_file)
 from weight_functions import (distance_window, distance_window_derivative,

@@ -4,8 +4,8 @@ import torch
 import torch.nn.functional as F
 from matplotlib.colors import Normalize
 
-from models import WindowParams
-from utils import remove_trailing_zeros
+from src.models import WindowParams
+from src.utils import remove_trailing_zeros
 from weight_functions import distance_window, gaussian_window
 
 

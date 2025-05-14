@@ -1,7 +1,7 @@
 import torch
 
-from models import WindowParams
-from utils import remove_trailing_zeros
+from src.models import WindowParams
+from src.utils import remove_trailing_zeros
 
 
 def gaussian_window(x, params: WindowParams):

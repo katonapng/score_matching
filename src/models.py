@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 from tqdm import tqdm
 
-from utils import save_gradients_as_gif, visualize_gradients
+from src.utils import save_gradients_as_gif, visualize_gradients
 
 
 @dataclass
