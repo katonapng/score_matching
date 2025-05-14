@@ -1,28 +1,16 @@
-import argparse
 import copy
-import json
 import warnings
 from functools import partial
 
 import numpy as np
 import optuna
 
-from metrics import compute_smd
+from metrics import calculate_metrics
 from models import Poisson_SM, optimize_nn
-from utils import generate_training_data_poisson
+from shared_args import get_shared_parser
+from utils import generate_training_data_poisson, read_args_from_file
 from weight_functions import (distance_window, distance_window_derivative,
                               gaussian_window, gaussian_window_derivative)
-
-
-def read_args_from_file(file_path, default_args):
-    with open(file_path, "r") as f:
-        args_dict = json.load(f)
-
-    # Override defaults with config values
-    for key, value in args_dict.items():
-        setattr(default_args, key, value)
-
-    return default_args
 
 
 def objective(trial, args):
@@ -53,7 +41,7 @@ def objective(trial, args):
             trial=trial,
         )
 
-        smd, _ = compute_smd(test, model, trial_args)
+        smd, _, _ = calculate_metrics(test, model, trial_args)
         smd_scores.append(smd)
 
     # Return the average SMD across all regions (can be weighted if needed)
@@ -90,47 +78,7 @@ if __name__ == "__main__":
     warnings.filterwarnings("ignore", category=UserWarning)
     warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--config",
-        type=str,
-        help="Path to JSON file with arguments",
-    )
-    parser.add_argument("--dimensions", type=int, choices=[1, 2])
-
-    parser.add_argument("--weighting", default=False, type=bool)
-    parser.add_argument(
-        "--weight_function",
-        default=None,
-        choices=["gaussian", "distance"],
-        help="Weight function to use: ['gaussian', 'distance']",
-        type=str
-    )
-    parser.add_argument(
-        "--dist_params",
-        type=str,
-        help="JSON string of parameters",
-    )
-    parser.add_argument("--n_trials", default=30, type=int)
-    parser.add_argument("--mirror_boundary", default=True, type=str)
-    parser.add_argument("--weight_derivative", default=None, type=str)
-    parser.add_argument("--num_samples", default=100, type=int)
-    parser.add_argument("--train_ratio", default=0.8, type=float)
-    parser.add_argument("--val_ratio", default=0.1, type=float)
-    parser.add_argument("--batch_size", default=32, type=int)
-    parser.add_argument("--epochs", default=100, type=int)
-    parser.add_argument("--learning_rate", default=1e-3, type=float)
-    parser.add_argument("--patience", default=10, type=int)
-    parser.add_argument("--plot_gradients", default=False, type=str)
-    parser.add_argument("--l2_regularization", default=True, type=str)
-    parser.add_argument("--optuna", default=False, type=str)
-    parser.add_argument(
-        "--percent",
-        default=10.0,
-        type=float,
-        help="Percent of the domain to be used for distance weighting",
-    )
-
+    parser = get_shared_parser()
     args = parser.parse_args()
 
     if args.config:
