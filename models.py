@@ -1,11 +1,11 @@
 import time
+from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
 from tqdm import tqdm
-from dataclasses import dataclass
 
-from utils import visualize_gradients, save_gradients_as_gif
+from utils import save_gradients_as_gif, visualize_gradients
 
 
 @dataclass
@@ -13,6 +13,7 @@ class WindowParams:
     lengths: torch.Tensor = None
     region: list = None
     percent: float = None
+    mirror_boundary: bool = None
 
 
 class Poisson_SM(nn.Module):
@@ -25,6 +26,9 @@ class Poisson_SM(nn.Module):
         self.weighting_derivative = args.weight_derivative
         self.region = args.region
         self.percent = args.percent
+        self.mirror_boundary = args.mirror_boundary
+        self.intensity_penalty = args.intensity_penalty
+        self.alpha = args.alpha
 
         layers = []
         last_dim = input_dim
@@ -50,20 +54,24 @@ class Poisson_SM(nn.Module):
 
     def compute_psi(self, x):
         x.requires_grad_(True)
-        intensity = self.forward(x)
+        log_intensity = self.forward(x)
         psi = torch.autograd.grad(
-            intensity, x,
-            grad_outputs=torch.ones_like(intensity),
+            log_intensity, x,
+            grad_outputs=torch.ones_like(log_intensity),
             create_graph=True
         )[0]
-        return psi, intensity
+        return psi, log_intensity.squeeze(-1)
 
     def loss(self, x, lengths, mask):
-        psi_x, intensity = self.compute_psi(x)
+        psi_x, log_intensity = self.compute_psi(x)
+        psi_x = psi_x*mask.unsqueeze(-1)
 
         if self.weighting_function is not None:
             params = WindowParams(
-                lengths=lengths, region=self.region, percent=self.percent,
+                lengths=lengths,
+                region=self.region,
+                percent=self.percent,
+                mirror_boundary=self.mirror_boundary,
             )
             h = self.weighting_function(x, params)
             grad_h = self.weighting_derivative(x, params)
@@ -84,11 +92,23 @@ class Poisson_SM(nn.Module):
         divergence = divergence * mask
         norm_squared = norm_squared * mask
         weight = weight * mask
+        log_intensity = log_intensity * mask
 
-        total_loss = 0.5 * norm_squared + divergence + weight
+        total_loss = (
+            0.5 * norm_squared + divergence + weight
+        )
+        if self.intensity_penalty:
+            total_loss += self.alpha * (log_intensity ** 2)
         total_loss = total_loss.sum(dim=-1) / lengths
 
-        return total_loss.mean()
+        return (
+            total_loss.mean(),
+            0.5 * norm_squared.mean(),
+            divergence.mean(),
+            weight.mean(),
+            log_intensity.mean(),
+            psi_x.mean(),
+        )
 
 
 class Poisson_MLE(nn.Module):
@@ -188,48 +208,76 @@ def optimize_nn(loader_train, loader_val, nn_model, args, trial=None):
             - torch.nn.Module: Trained neural network model.
             - list[float]: List of training loss values recorded per epoch.
     """
+    def compute_loss(model, X_batch, l2_regularization=False):
+        x_data = X_batch[0]
+        lengths = x_data[:, 0, -1].to(dtype=torch.int64)
+        max_length = lengths.max()
+        padded_x = x_data[:, :max_length, :-1]
+
+        mask = torch.arange(max_length).unsqueeze(0)
+        mask = mask < lengths.unsqueeze(1)
+
+        loss_output = model.loss(padded_x, lengths, mask)
+        if isinstance(loss_output, tuple):
+            loss, norm_squared, divergence, weight, log_intensity, psi_x = loss_output
+        else:
+            loss = loss_output
+            norm_squared = divergence = weight = log_intensity = psi_x = torch.tensor(0.0)
+
+        if l2_regularization:
+            l2_lambda = 1e-3
+            l2_norm = sum(
+                p.pow(2.0).sum() for p in model.parameters()
+                if p.requires_grad
+            )
+            loss = loss + l2_lambda * l2_norm
+
+        return loss, norm_squared, divergence, weight, log_intensity, psi_x
+
     def run_epoch(
-            loader_train, loader_val, model, optimizer=None, total_samples=None
+        loader_train, loader_val, model, optimizer=None,
+        train_samples=None, val_samples=None
     ):
-        # Training phase
         model.train()
-
         loss_sum = 0.0
+        norm_squared_sum = 0.0
+        divergence_sum = 0.0
+        weight_sum = 0.0
+        log_intensity_sum = 0.0
+        psi_x_sum = 0.0
         for X_batch in loader_train:
-            x_data = X_batch[0]
-
-            lengths = x_data[:, 0, -1].to(dtype=torch.int64)
-            max_length = lengths.max()
-            padded_x = x_data[:, :max_length, :-1]
-
-            mask = torch.arange(max_length).unsqueeze(0)
-            mask = mask < lengths.unsqueeze(1)
-
             optimizer.zero_grad()
-            loss = model.loss(padded_x, lengths, mask)
+            loss, norm_squared, divergence, weight, log_intensity, psi_x = compute_loss(
+                model, X_batch, l2_regularization=args.l2_regularization
+            )
             loss.backward()
-
-            if args.l2_regularization:
-                l2_lambda = 1e-3
-                l2_norm = sum(
-                    p.pow(2.0).sum() for p in model.parameters()
-                    if p.requires_grad
-                )
-                loss = loss + l2_lambda * l2_norm
-
             optimizer.step()
-
             loss_sum += loss.item()
+            norm_squared_sum += norm_squared.item()
+            divergence_sum += divergence.item()
+            weight_sum += weight.item()
+            log_intensity_sum += log_intensity.item()
+            psi_x_sum += psi_x.item()
 
-        avg_train_loss = loss_sum / total_samples if total_samples > 0 else 0.0
+        avg_train_loss = loss_sum / train_samples if train_samples > 0 else 0.0
+        avg_norm_squared = norm_squared_sum / train_samples if train_samples > 0 else 0.0
+        avg_divergence = divergence_sum / train_samples if train_samples > 0 else 0.0
+        avg_weight = weight_sum / train_samples if train_samples > 0 else 0.0
+        avg_log_intensity = log_intensity_sum / train_samples if train_samples > 0 else 0.0
+        avg_psi_x = psi_x_sum / train_samples if train_samples > 0 else 0.0
 
-        # Validation phase
         model.eval()
-        with torch.no_grad():
-            from metrics import compute_smd
-            avg_val_smd, _ = compute_smd(loader_val, model, args)
+        val_loss_sum = 0.0
+        with torch.enable_grad():
+            for X_batch in loader_val:
+                loss, norm_squared, divergence, weight, log_intensity, psi_x = compute_loss(
+                    model, X_batch, l2_regularization=args.l2_regularization
+                )
+                val_loss_sum += loss.item()
 
-        return avg_train_loss, avg_val_smd
+        avg_val_loss = val_loss_sum / val_samples if val_samples > 0 else 0.0
+
+        return avg_train_loss, avg_val_loss, avg_norm_squared, avg_divergence, avg_weight, avg_log_intensity, avg_psi_x
 
     if args.optuna:
         # n_layers = trial.suggest_int("n_layers", 1, 4)
@@ -258,8 +306,11 @@ def optimize_nn(loader_train, loader_val, nn_model, args, trial=None):
         )
 
     frames = []
-    train_losses, val_smds = [], []
+    train_losses, val_losses = [], []
+    train_log_intensity, train_psi_x = [], []
+    train_norm_squared, train_divergence, train_weight = [], [], []
     train_samples = len(loader_train)
+    val_samples = len(loader_val)
     best_val_smd = float('inf')
 
     patience = args.patience  # e.g., 10
@@ -274,12 +325,19 @@ def optimize_nn(loader_train, loader_val, nn_model, args, trial=None):
         start_time = time.time()
 
         # Training and Validation phase
-        avg_train_loss, avg_val_smd = run_epoch(
-            loader_train, loader_val, model, optimizer,
-            total_samples=train_samples,
-        )
+        avg_train_loss, avg_val_loss, avg_norm_squared, avg_divergence, \
+            avg_weight, avg_log_intensity, avg_psi_x = run_epoch(
+                loader_train, loader_val, model, optimizer,
+                train_samples=train_samples,
+                val_samples=val_samples,
+            )
         train_losses.append(avg_train_loss)
-        val_smds.append(avg_val_smd)
+        val_losses.append(avg_val_loss)
+        train_norm_squared.append(avg_norm_squared)
+        train_divergence.append(avg_divergence)
+        train_weight.append(avg_weight)
+        train_log_intensity.append(avg_log_intensity)
+        train_psi_x.append(avg_psi_x)
 
         if args.plot_gradients and epoch % 5 == 0:
             visualize_gradients(model, args, epoch, frames)
@@ -287,13 +345,13 @@ def optimize_nn(loader_train, loader_val, nn_model, args, trial=None):
         elapsed_time = time.time() - start_time
         pbar.set_postfix({
             "Train Loss": f"{avg_train_loss:.4f}",
-            "Val SMD": f"{avg_val_smd:.6f}",
+            "Validation Loss": f"{avg_val_loss:.6f}",
             "Time/Epoch": f"{elapsed_time:.2f}s",
         })
 
         # Early stopping check
-        if avg_val_smd < best_val_smd - delta:
-            best_val_smd = avg_val_smd
+        if avg_val_loss < best_val_smd - delta:
+            best_val_smd = avg_val_loss
             best_model_state = model.state_dict()
             torch.save(best_model_state, 'best_model.pth')
             wait = 0  # Reset patience counter
@@ -312,4 +370,13 @@ def optimize_nn(loader_train, loader_val, nn_model, args, trial=None):
     if best_model_state is not None:
         model.load_state_dict(best_model_state)
 
-    return model, train_losses, val_smds
+    return (
+        model,
+        train_losses,
+        val_losses,
+        train_norm_squared,
+        train_divergence,
+        train_weight,
+        train_log_intensity,
+        train_psi_x,
+    )
