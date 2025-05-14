@@ -5,10 +5,10 @@ from functools import partial
 import numpy as np
 import optuna
 
-from metrics import calculate_metrics
-from models import Poisson_SM, optimize_nn
-from shared_args import get_shared_parser
-from utils import generate_training_data_poisson, read_args_from_file
+from src.metrics import calculate_metrics
+from src.models import Poisson_SM, optimize_nn
+from src.shared_args import get_shared_parser
+from src.utils import generate_training_data_poisson, read_args_from_file
 from weight_functions import (distance_window, distance_window_derivative,
                               gaussian_window, gaussian_window_derivative)
 

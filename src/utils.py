@@ -11,7 +11,7 @@ from PIL import Image
 from scipy.integrate import nquad
 from torch.nn.utils.rnn import pad_sequence
 
-from dataloader import FastTensorDataLoader
+from src.dataloader import FastTensorDataLoader
 
 
 def read_args_from_file(file_path, default_args):
