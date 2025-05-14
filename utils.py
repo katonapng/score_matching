@@ -1,4 +1,7 @@
 import itertools
+import json
+import os
+import shutil
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -9,6 +12,102 @@ from scipy.integrate import nquad
 from torch.nn.utils.rnn import pad_sequence
 
 from dataloader import FastTensorDataLoader
+
+
+def read_args_from_file(file_path, default_args):
+    with open(file_path, "r") as f:
+        args_dict = json.load(f)
+
+    # Override defaults with config values
+    for key, value in args_dict.items():
+        setattr(default_args, key, value)
+
+    return default_args
+
+
+def get_region_dimension(region):
+    if isinstance(region[0], list):
+        return len(region)
+    else:
+        return 1
+
+
+def generate_output_filenames(args):
+    # Base path for 1d or 2d results
+    base_path = "results/1d" if args.dimensions == 1 else "results/2d"
+
+    # Convert model name to folder shorthand
+    model_folder = "SM" if args.model == "Poisson_SM" else "MLE"
+
+    # Convert boolean args to string
+    mirror_folder = "mirror" if args.mirror_boundary else "no_mirror"
+    l2_folder = "l2" if args.l2_regularization else "no_l2"
+
+    # Construct full base path with new folders
+    base_path = os.path.join(base_path, model_folder, mirror_folder, l2_folder)
+
+    # Weighting path
+    if args.weight_function is not None:
+        weight_path = f"weighting_{args.weight_function}"
+    else:
+        weight_path = "no_weighting"
+
+    if args.folder_suffix:
+        weight_path += f"_{args.folder_suffix}"
+
+    # Combine full path
+    full_path = os.path.join(base_path, weight_path)
+    os.makedirs(full_path, exist_ok=True)
+
+    # Region suffix
+    region_suffix = f"region{args.region}".replace(" ", "")
+
+    # Gradient directory
+    if args.plot_gradients:
+        gradient_dir = os.path.join(full_path, "gradients", region_suffix)
+        if os.path.exists(gradient_dir):
+            shutil.rmtree(gradient_dir)
+        os.makedirs(gradient_dir, exist_ok=True)
+    else:
+        gradient_dir = None
+
+    # Losses directory
+    losses_dir = os.path.join(full_path, "losses")
+    os.makedirs(losses_dir, exist_ok=True)
+
+    # Output files
+    output_json = os.path.join(full_path, f"results_{region_suffix}.json")
+    output_image = os.path.join(full_path, f"output_plot_{region_suffix}.png")
+    loss_image = os.path.join(losses_dir, f"loss_plot_{region_suffix}.png")
+
+    return output_json, output_image, gradient_dir, loss_image
+
+
+def check_file_existence(output_json, output_image):
+    if os.path.exists(output_json) or os.path.exists(output_image):
+        response = input(
+            (
+                f"Output files '{output_json}' "
+                f"or '{output_image}' already exist. "
+                "Overwrite? (y/n): "
+            )
+            )
+        if response.lower() != 'y':
+            print("Aborting execution.")
+            exit()
+
+
+def convert_to_native(obj):
+    if isinstance(obj, dict):
+        return {k: convert_to_native(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_to_native(v) for v in obj]
+    elif isinstance(obj, (np.integer, np.int64)):
+        return int(obj)
+    elif isinstance(obj, (np.floating, np.float64)):
+        return float(obj)
+    else:
+        return obj
 
 
 def remove_trailing_zeros(arr, lengths):
@@ -119,33 +218,36 @@ def generate_training_data_poisson(args):
     for _ in range(num_samples):
         x_t, args.kappa = generate_poisson_points(scale, region, n_expected)
         if args.mirror_boundary:
-            # Mirror split
             a = region[:, 0]
             b = region[:, 1]
 
             mid = (a + b) / 2
-            half_length = (b - a) / 2
+            proportion_region = (b - a) / 2
 
             mirrored_parts = [x_t]
 
-            # Reflect along the left and right halves for each dimension
+            # Reflect along the left and right
             for dim in range(args.dimensions):
-                # Mask for the left part
-                mask_left = x_t[:, dim] <= mid[dim]
+                left_thresh = a[dim] + proportion_region[dim]
+                right_thresh = b[dim] - proportion_region[dim]
+
+                # Mask for the left quarter
+                mask_left = x_t[:, dim] <= left_thresh
                 left_part = x_t[mask_left]
 
                 left_mirror = left_part.clone()
                 left_mirror[:, dim] = abs(
-                    (left_part[:, dim] - half_length[dim]) - a[dim]
-                ) + a[dim] - half_length[dim]
+                    (left_part[:, dim] - proportion_region[dim]) - a[dim]
+                ) + a[dim] - proportion_region[dim]
 
-                mask_right = x_t[:, dim] > mid[dim]
+                # Mask for the right quarter
+                mask_right = x_t[:, dim] >= right_thresh
                 right_part = x_t[mask_right]
 
                 right_mirror = right_part.clone()
                 right_mirror[:, dim] = abs(
-                    (right_part[:, dim] - half_length[dim]) - b[dim]
-                ) + b[dim] - half_length[dim]
+                    (right_part[:, dim] - proportion_region[dim]) - b[dim]
+                ) + b[dim] - proportion_region[dim]
 
                 mirrored_parts.extend([left_mirror, right_mirror])
 
@@ -169,12 +271,12 @@ def generate_training_data_poisson(args):
                 for dim, side in enumerate(combo):
                     if side == 0:
                         part[:, dim] = abs(
-                            (part[:, dim] - half_length[dim]) - a[dim]
-                        ) + a[dim] - half_length[dim]
+                            (part[:, dim] - proportion_region[dim]) - a[dim]
+                        ) + a[dim] - proportion_region[dim]
                     else:
                         part[:, dim] = abs(
-                            (part[:, dim] - half_length[dim]) - b[dim]
-                        ) + b[dim] - half_length[dim]
+                            (part[:, dim] - proportion_region[dim]) - b[dim]
+                        ) + b[dim] - proportion_region[dim]
 
                 mirrored_parts.append(part)
 
@@ -246,14 +348,26 @@ def visualize_gradients(model, args, epoch, frames):
     x_grid = np.linspace(ymin, ymax, 20)
     X, Y = np.meshgrid(x_grid, y_grid)
     grid_points = torch.tensor(
-        np.vstack([X.ravel(), Y.ravel()]).T, dtype=torch.float32,
+        np.vstack([X.ravel(), Y.ravel()]).T,
+        dtype=torch.float32, requires_grad=True,
     )
 
     # Get real and predicted gradients
     real_gradient = get_real_poisson_gradient(
         grid_points, args.kappa, args.dist_params.get("scale"),
     )
-    predicted_gradient = model.compute_psi(grid_points)[0]
+    if hasattr(model, "compute_psi"):  # SM model
+        predicted_gradient = model.compute_psi(grid_points)[0]
+    else:  # MLE model
+        log_intensity = model(grid_points)
+        predicted_gradient = torch.autograd.grad(
+            outputs=log_intensity,
+            inputs=grid_points,
+            grad_outputs=torch.ones_like(log_intensity),
+            create_graph=False,
+            retain_graph=False,
+            only_inputs=True
+        )[0]
 
     real_grad_magnitude = torch.norm(real_gradient, dim=1)
     pred_grad_magnitude = torch.norm(predicted_gradient, dim=1)
@@ -268,8 +382,14 @@ def visualize_gradients(model, args, epoch, frames):
     ) * scaling_factor
 
     # Create a colormap and normalization
-    norm_real = colors.Normalize(vmin=real_grad_magnitude.min().item(), vmax=real_grad_magnitude.max().item())
-    norm_pred = colors.Normalize(vmin=pred_grad_magnitude.min().item(), vmax=pred_grad_magnitude.max().item())
+    norm_real = colors.Normalize(
+        vmin=real_grad_magnitude.min().item(),
+        vmax=real_grad_magnitude.max().item(),
+    )
+    norm_pred = colors.Normalize(
+        vmin=pred_grad_magnitude.min().item(),
+        vmax=pred_grad_magnitude.max().item(),
+    )
     cmap = cm.viridis
 
     # Create a ScalarMappable to link the colorbar to the actual gradient magnitudes
