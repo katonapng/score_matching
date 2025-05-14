@@ -1,34 +1,38 @@
-import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+import torch.nn.functional as F
+from matplotlib.colors import Normalize
 
 from models import WindowParams
 from utils import remove_trailing_zeros
 from weight_functions import distance_window, gaussian_window
 
 
-def calculate_score_matching_difference(intensity_real, intensity_pred, dim):
+def calculate_score_matching_difference(
+        log_intensity_real, log_intensity_pred, dim,
+):
     """
     Calculate the Score Matching Difference (SMD)
-    between the real and predicted intensities.
+    between the real and predicted log intensities.
     """
-    intensity_real = np.asarray(intensity_real)
-    intensity_pred = np.asarray(intensity_pred)
+    log_intensity_real = np.asarray(log_intensity_real)
+    log_intensity_pred = np.asarray(log_intensity_pred)
     if dim == 1:
-        intensity_real = intensity_real.squeeze(-1)
+        log_intensity_real = log_intensity_real.squeeze(-1)
 
-    gradient_real = np.gradient(np.log(intensity_real))
-    gradient_pred = np.gradient(np.log(intensity_pred))
+    gradient_real = np.gradient(log_intensity_real)
+    gradient_pred = np.gradient(log_intensity_pred)
 
-    return np.sum((gradient_real - gradient_pred) ** 2).astype(np.float64)
+    return np.sum((gradient_real - gradient_pred) ** 2)
 
 
-def compute_smd(loader, model, args):
+def calculate_metrics(loader, model, args):
     smd_list = []
-    intensity_stats = {'min': [], 'mean': [], 'max': []}
+    mae_list = []
+    log_intensity_stats = {'min': [], 'mean': [], 'max': []}
 
-    kappa = args.kappa
+    kappa = torch.tensor(args.kappa)
     scale = args.dist_params.get("scale")
 
     for batch in loader:
@@ -55,44 +59,43 @@ def compute_smd(loader, model, args):
 
             # Compute true intensity
             if args.dimensions == 1:
-                intensity_real = kappa * torch.exp(
-                    -x_test_filtered**2 / scale**2
-                )
+                log_intensity_real = torch.log(kappa) - x_test_filtered**2 / scale**2
                 model_input = x_test_filtered
             else:
-                intensity_real = kappa * np.exp(
-                    -(
-                        x_test_filtered[:, 0]**2 + x_test_filtered[:, 1]**2
-                    ) / scale**2
+                log_intensity_real = torch.log(kappa) - (
+                    (x_test_filtered[:, 0]**2 + x_test_filtered[:, 1]**2) / scale**2
                 )
-                model_input = torch.tensor(x_test_filtered[:, :-1])
+                model_input = x_test_filtered[:, :-1]  # exclude timestamp if present
 
             # Predict intensity
-            intensity_pred = torch.exp(model(model_input).detach()).squeeze(-1)
-
-            # Normalize for score matching
-            intensity_pred_norm = intensity_pred / intensity_pred.max()
-            intensity_real_norm = intensity_real / intensity_real.max()
+            log_intensity_pred = model(model_input).detach().squeeze(-1)
+            shift = (log_intensity_real.mean() - log_intensity_pred.mean()).item()
+            log_intensity_pred_aligned = log_intensity_pred + shift
 
             # Calculate SMD
             smd = calculate_score_matching_difference(
-                intensity_real_norm, intensity_pred_norm, args.dimensions
+                log_intensity_real, log_intensity_pred, args.dimensions,
             )
             smd_list.append(smd)
 
+            # Calculate MAE
+            mae = F.l1_loss(log_intensity_pred_aligned, log_intensity_real, reduction='mean')
+            mae_list.append(mae.item())
+
             # Save intensity statistics
-            intensity_stats['min'].append(intensity_pred.min().item())
-            intensity_stats['mean'].append(intensity_pred.mean().item())
-            intensity_stats['max'].append(intensity_pred.max().item())
+            log_intensity_stats['min'].append(log_intensity_pred.min().item())
+            log_intensity_stats['mean'].append(log_intensity_pred.mean().item())
+            log_intensity_stats['max'].append(log_intensity_pred.max().item())
 
     avg_smd = np.mean(smd_list)
-    avg_intensity_stats = {
-        'min': np.mean(intensity_stats['min']),
-        'mean': np.mean(intensity_stats['mean']),
-        'max': np.mean(intensity_stats['max']),
+    avg_mae = np.mean(mae_list)
+    avg_log_intensity_stats = {
+        'min': np.mean(log_intensity_stats['min']),
+        'mean': np.mean(log_intensity_stats['mean']),
+        'max': np.mean(log_intensity_stats['max']),
     }
 
-    return avg_smd, avg_intensity_stats
+    return avg_smd, avg_mae, avg_log_intensity_stats
 
 
 def plot_results(args, model, test_loader):
@@ -116,7 +119,11 @@ def plot_results(args, model, test_loader):
             )
             weights = gaussian_window(temp, params)
         elif weight_fn_name == "distance_window":
-            params = WindowParams(region=args.region, percent=args.percent)
+            params = WindowParams(
+                region=args.region,
+                percent=args.percent,
+                mirror_boundary=args.mirror_boundary,
+            )
             weights = distance_window(temp, params)
         else:
             return
@@ -139,7 +146,10 @@ def plot_results(args, model, test_loader):
         kappa, scale = args.kappa, args.dist_params.get("scale")
         x = x[:, 0]
         x_min, x_max = x.min(), x.max()
-        x_lin = np.linspace(args.region[0], args.region[1], 100)
+        if args.mirror_boundary:
+            x_lin = np.linspace(x_min, x_max, 100)
+        else:
+            x_lin = np.linspace(args.region[0], args.region[1], 100)
 
         with torch.no_grad():
             intensity_pred = model(
@@ -188,7 +198,8 @@ def plot_results(args, model, test_loader):
         plt.ylabel(fr'Intensity ($\kappa$ = {kappa:.2f})', fontsize=12)
         plt.title("Normalized Intensities", fontsize=12)
         plt.grid(True, linestyle='--', alpha=0.5)
-        plt.xlim(args.region[0], args.region[1])
+        if not args.mirror_boundary:
+            plt.xlim(args.region[0], args.region[1])
         plt.legend()
 
     def plot_2d(x):
@@ -203,7 +214,7 @@ def plot_results(args, model, test_loader):
             intensity_pred = torch.exp(intensity_pred).reshape(xx.shape)
 
         intensity_real = kappa * np.exp(-(xx**2 + yy**2) / scale**2)
-        norm = mcolors.Normalize(vmin=0, vmax=1)
+        intensity_pred_np = intensity_pred.numpy()
 
         fig, axs = plt.subplots(1, 3, figsize=(24, 8), constrained_layout=True)
         titles = [
@@ -211,36 +222,58 @@ def plot_results(args, model, test_loader):
             'True Intensity',
             'Difference Between Actual and Predicted Intensities'
         ]
-        plots = [
-            intensity_pred / intensity_pred.max(),
-            intensity_real / intensity_real.max(),
-            abs(
-                (intensity_pred / intensity_pred.max()) -
-                (intensity_real / intensity_real.max())
-            )
-        ]
         cmaps = ['viridis', 'viridis', 'cividis']
 
         (xmin, xmax), (ymin, ymax) = args.region
+        region_mask = ((xx >= xmin) & (xx <= xmax) & (yy >= ymin) & (yy <= ymax))
         opacity_mask = np.where(
             (xx >= xmin) & (xx <= xmax) & (yy >= ymin) & (yy <= ymax), 1.0, 0.5
         )
 
+        # Get normalization factor only from original region
+        norm_factor_pred = intensity_pred_np[region_mask].max()
+        norm_factor_real = intensity_real[region_mask].max()
+
+        # Normalize only by the original region's max
+        intensity_pred_norm = intensity_pred_np / norm_factor_pred
+        intensity_real_norm = intensity_real / norm_factor_real
+
+        abs_diff = abs(intensity_pred_norm - intensity_real_norm)
+
+        norm_pred = Normalize(vmin=0, vmax=1)
+        norm_real = Normalize(vmin=0, vmax=1)
+        norm_diff = Normalize(vmin=0, vmax=1)
+
+        plots = [
+            intensity_pred_norm,
+            intensity_real_norm,
+            abs_diff
+        ]
+
         for i, (plot_data, title, cmap) in enumerate(zip(plots, titles, cmaps)):
             if isinstance(plot_data, torch.Tensor):
                 plot_data = plot_data.numpy()
+
+            # Select the correct norm object
+            norm_used = None
+            if i == 0:
+                norm_used = norm_pred
+            elif i == 1:
+                norm_used = norm_real
+            elif i == 2:
+                norm_used = norm_diff
 
             if args.mirror_boundary:
                 c = axs[i].imshow(
                     plot_data,
                     extent=[x_vals.min(), x_vals.max(), y_vals.min(), y_vals.max()],
                     origin='lower', cmap=cmap, alpha=opacity_mask,
-                    aspect='auto', norm=norm if i < 2 else None
+                    aspect='auto', norm=norm_used
                 )
             else:
                 c = axs[i].contourf(
                     xx, yy, plot_data, levels=50, alpha=0.8,
-                    cmap=cmap, norm=norm if i < 2 else None
+                    cmap=cmap, norm=norm_used
                 )
 
             axs[i].scatter(
@@ -279,27 +312,79 @@ def plot_results(args, model, test_loader):
     plt.close()
 
 
-def plot_loss_smd(train_losses, val_smds, args):
+def plot_losses(
+        train_losses, val_losses, norm_squared_list, 
+        divergence_list, weight_list, log_density_list, 
+        psi_x_list, args
+):
     epochs = range(1, len(train_losses) + 1)
 
-    fig, ax1 = plt.subplots()
+    fig, axs = plt.subplots(5, 1, figsize=(10, 14), sharex=True)
 
-    # Plot training losses on the first y-axis
-    color = 'tab:blue'
-    ax1.set_xlabel('Epoch')
-    ax1.set_ylabel('Train Loss', color=color)
-    ax1.plot(epochs, train_losses, color=color, label='Train Loss')
-    ax1.tick_params(axis='y', labelcolor=color)
-
-    # Create a second y-axis sharing the same x-axis
-    ax2 = ax1.twinx()
-
-    color = 'tab:red'
-    ax2.set_ylabel('Validation SMD', color=color)
-    ax2.plot(epochs, val_smds, color=color, label='Validation SMD')
-    ax2.tick_params(axis='y', labelcolor=color)
-
+    # Subplot 1: Train Loss and Validation Loss
+    color1 = 'tab:blue'
+    color2 = 'tab:red'
+    ax1 = axs[0]
+    ax1.set_ylabel('Train Loss', color=color1)
+    ax1.plot(epochs, train_losses, color=color1, label='Train Loss')
+    ax1.tick_params(axis='y', labelcolor=color1)
     ax1.grid(True)
-    plt.title('Training Loss and Validation SMD over Epochs')
-    fig.tight_layout()
+
+    ax2 = ax1.twinx()
+    ax2.set_ylabel('Validation Loss', color=color2)
+    ax2.plot(epochs, val_losses, color=color2, label='Validation Loss')
+    ax2.tick_params(axis='y', labelcolor=color2)
+
+    ax1.set_title('Training and Validation Loss over Epochs')
+
+    # Subplot 2: norm_squared + log_density
+    ax3 = axs[1]
+    ax3.plot(epochs, norm_squared_list, label='Norm Squared', color='tab:green')
+    ax3.set_ylabel('Norm Squared', color='tab:green')
+    ax3.tick_params(axis='y', labelcolor='tab:green')
+    ax3.grid(True)
+
+    ax3b = ax3.twinx()
+    ax3b.plot(epochs, log_density_list, label='Log Density', color='tab:brown', linestyle='--')
+    ax3b.set_ylabel('Log Density', color='tab:brown')
+    ax3b.tick_params(axis='y', labelcolor='tab:brown')
+
+    # Subplot 3: divergence + log_density
+    ax4 = axs[2]
+    ax4.plot(epochs, divergence_list, label='Divergence', color='tab:orange')
+    ax4.set_ylabel('Divergence', color='tab:orange')
+    ax4.tick_params(axis='y', labelcolor='tab:orange')
+    ax4.grid(True)
+
+    ax4b = ax4.twinx()
+    ax4b.plot(epochs, log_density_list, label='Log Density', color='tab:brown', linestyle='--')
+    ax4b.set_ylabel('Log Density', color='tab:brown')
+    ax4b.tick_params(axis='y', labelcolor='tab:brown')
+
+    # Subplot 4: weight + log_density
+    ax5 = axs[3]
+    ax5.plot(epochs, weight_list, label='Weight', color='tab:purple')
+    ax5.set_ylabel('Weight', color='tab:purple')
+    ax5.tick_params(axis='y', labelcolor='tab:purple')
+    ax5.grid(True)
+
+    ax5b = ax5.twinx()
+    ax5b.plot(epochs, log_density_list, label='Log Density', color='tab:brown', linestyle='--')
+    ax5b.set_ylabel('Log Density', color='tab:brown')
+    ax5b.tick_params(axis='y', labelcolor='tab:brown')
+
+    # Subplot 5: psi_x + log_density
+    ax6 = axs[4]
+    ax6.plot(epochs, psi_x_list, label='Psi(x)', color='tab:cyan')
+    ax6.set_ylabel('Psi(x)', color='tab:cyan')
+    ax6.set_xlabel('Epoch')
+    ax6.tick_params(axis='y', labelcolor='tab:cyan')
+    ax6.grid(True)
+
+    ax6b = ax6.twinx()
+    ax6b.plot(epochs, log_density_list, label='Log Density', color='tab:brown', linestyle='--')
+    ax6b.set_ylabel('Log Density', color='tab:brown')
+    ax6b.tick_params(axis='y', labelcolor='tab:brown')
+
+    plt.tight_layout()
     plt.savefig(args.loss_image)
