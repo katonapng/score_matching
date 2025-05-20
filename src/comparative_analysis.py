@@ -9,10 +9,11 @@ from src.metrics import calculate_metrics
 from src.models import Poisson_MLE, Poisson_SM, optimize_nn
 from src.shared_args import get_shared_parser
 from src.utils import (check_file_existence, convert_to_native,
-                   generate_output_filenames, generate_training_data_poisson,
-                   get_region_dimension, read_args_from_file)
-from weight_functions import (distance_window, distance_window_derivative,
-                              gaussian_window, gaussian_window_derivative)
+                       generate_output_filenames,
+                       generate_training_data_poisson, get_region_dimension,
+                       read_args_from_file)
+from src.weight_functions import (distance_window, distance_window_derivative,
+                                  gaussian_window, gaussian_window_derivative)
 
 
 def track_memory():
