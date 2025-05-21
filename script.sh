@@ -7,7 +7,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=8G
-#SBATCH --mail-type=END,FAIL
+#SBATCH --mail-type=FAIL
 #SBATCH --mail-user=anna.kurova@tu-dresden.de
 
 # Load Python module if needed
@@ -22,7 +22,7 @@ WORKDIR="/data/horse/ws/${USER}/score_matching_job_${SLURM_JOB_ID}"
 mkdir -p "$WORKDIR"
 
 # Sync project to workspace
-rsync -av --exclude="models_notebooks/" --exclude="logs/" --exclude="results_*/" "$HOME/score_matching/" "$WORKDIR/"
+rsync -av --exclude="models_notebooks/" --exclude="logs/" --exclude="results*/" "$HOME/score_matching/" "$WORKDIR/"
 echo "Working in $WORKDIR" || { echo "Failed to cd into $WORKDIR"; exit 1; }
 
 # Move to project folder
