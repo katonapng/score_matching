@@ -6,7 +6,7 @@ from matplotlib.colors import Normalize
 
 from src.models import WindowParams
 from src.utils import remove_trailing_zeros
-from weight_functions import distance_window, gaussian_window
+from src.weight_functions import distance_window, gaussian_window
 
 
 def calculate_score_matching_difference(

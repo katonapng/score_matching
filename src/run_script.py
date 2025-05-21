@@ -111,6 +111,7 @@ def save_config_and_run(
     # Build filename
     suffix = f"{script_name}_{index}" if index is not None else script_name
     config_filename = f"configs/config_{suffix}.json"
+    os.makedirs(os.path.dirname(config_filename), exist_ok=True)
     if region_key and region:
         config[region_key] = region
     with open(config_filename, "w") as f:
@@ -118,10 +119,9 @@ def save_config_and_run(
 
     print(f"Running: {script_name} with config {config_filename}")
     subprocess.run(
-        [venv_python, f"{script_name}.py", "--config", config_filename],
+        [venv_python, "-m", f"src.{script_name}", "--config", config_filename],
         check=True,
     )
-
 
 def main():
     parser = argparse.ArgumentParser()
