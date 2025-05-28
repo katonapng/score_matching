@@ -30,6 +30,7 @@ def calculate_score_matching_difference(
 def calculate_metrics(loader, model, args):
     smd_list = []
     mae_list = []
+    maxae_list = []
     log_intensity_stats = {'min': [], 'mean': [], 'max': []}
 
     kappa = torch.tensor(args.kappa)
@@ -44,12 +45,14 @@ def calculate_metrics(loader, model, args):
                 x_test = x_test[:, 0].unsqueeze(1)
                 lower, upper = args.region
                 region_mask = (x_test >= lower) & (x_test <= upper)
+                region_volume = upper - lower
             else:
                 (x_lower, x_upper), (y_lower, y_upper) = args.region
                 region_mask = (
                     (x_test[:, 0] >= x_lower) & (x_test[:, 0] <= x_upper) &
                     (x_test[:, 1] >= y_lower) & (x_test[:, 1] <= y_upper)
                 )
+                region_volume = (x_upper - x_lower) * (y_upper - y_lower)
 
             x_test_filtered = (
                 x_test[region_mask].unsqueeze(1)
@@ -69,8 +72,17 @@ def calculate_metrics(loader, model, args):
 
             # Predict intensity
             log_intensity_pred = model(model_input).detach().squeeze(-1)
-            shift = (log_intensity_real.mean() - log_intensity_pred.mean()).item()
-            log_intensity_pred_aligned = log_intensity_pred + shift
+            if args.model == "Poisson_SM":
+                # log(kappa) = log(n_expected) - log_integral
+                n_expected = torch.tensor(x_test_filtered.shape[0])
+                log_integral = (
+                    torch.logsumexp(log_intensity_pred, dim=0)
+                    - torch.log(n_expected)
+                )
+                log_integral += torch.log(torch.tensor(region_volume))
+                log_kappa = torch.log(n_expected) - log_integral
+
+                log_intensity_pred = log_intensity_pred + log_kappa
 
             # Calculate SMD
             smd = calculate_score_matching_difference(
@@ -79,8 +91,16 @@ def calculate_metrics(loader, model, args):
             smd_list.append(smd)
 
             # Calculate MAE
-            mae = F.l1_loss(log_intensity_pred_aligned, log_intensity_real, reduction='mean')
+            mae = F.l1_loss(
+                log_intensity_pred, log_intensity_real, reduction='mean',
+            )
             mae_list.append(mae.item())
+
+            # Calculate MaxAE (L-infinity norm)
+            maxae = torch.max(
+                torch.abs(log_intensity_pred - log_intensity_real)
+            ).item()
+            maxae_list.append(maxae)
 
             # Save intensity statistics
             log_intensity_stats['min'].append(log_intensity_pred.min().item())
@@ -89,13 +109,14 @@ def calculate_metrics(loader, model, args):
 
     avg_smd = np.mean(smd_list)
     avg_mae = np.mean(mae_list)
+    avg_maxae = np.mean(maxae_list)
     avg_log_intensity_stats = {
         'min': np.mean(log_intensity_stats['min']),
         'mean': np.mean(log_intensity_stats['mean']),
         'max': np.mean(log_intensity_stats['max']),
     }
 
-    return avg_smd, avg_mae, avg_log_intensity_stats
+    return avg_smd, avg_mae, avg_maxae, avg_log_intensity_stats
 
 
 def plot_results(args, model, test_loader):
