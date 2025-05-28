@@ -38,7 +38,7 @@ def benchmark_model(
     )
     model, train_losses, val_losses, _, _, _, _, _ = result
 
-    avg_smd, avg_mae, _ = calculate_metrics(loader_test, model, args)
+    avg_smd, avg_mae, avg_maxae, _ = calculate_metrics(loader_test, model, args)
 
     end_time = time.time()
     time_per_epoch = (end_time - start_time) / len(train_losses)
@@ -62,6 +62,7 @@ def benchmark_model(
         'final_val_loss': val_losses[-1],
         'SMD': avg_smd,
         'MAE': avg_mae,
+        'MaxAE': avg_maxae,
     }
 
 

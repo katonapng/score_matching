@@ -5,10 +5,11 @@ from src.metrics import calculate_metrics, plot_losses, plot_results
 from src.models import Poisson_MLE, Poisson_SM, optimize_nn
 from src.shared_args import get_shared_parser
 from src.utils import (check_file_existence, convert_to_native,
-                       generate_output_filenames, generate_training_data_poisson,
-                       get_region_dimension, read_args_from_file)
+                       generate_output_filenames,
+                       generate_training_data_poisson, get_region_dimension,
+                       read_args_from_file)
 from src.weight_functions import (distance_window, distance_window_derivative,
-                              gaussian_window, gaussian_window_derivative)
+                                  gaussian_window, gaussian_window_derivative)
 
 
 def main(args):
@@ -67,7 +68,7 @@ def main(args):
 
     # Compute metrics
     print("Computing metrics...")
-    avg_smd, avg_mae, avg_intensity_stats = calculate_metrics(test, model, args)
+    avg_smd, avg_mae, avg_maxae, avg_intensity_stats = calculate_metrics(test, model, args)
 
     # Save metrics and parameters to JSON file
     if args.weight_function is not None:
@@ -78,6 +79,7 @@ def main(args):
         "metrics": {
             "SMD": avg_smd,
             "MAE": avg_mae,
+            "MaxAE": avg_maxae,
             "intensity_stats": avg_intensity_stats}
     }
     with open(args.output_json, "w") as f:

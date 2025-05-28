@@ -41,7 +41,7 @@ def objective(trial, args):
             trial=trial,
         )
 
-        smd, _, _ = calculate_metrics(test, model, trial_args)
+        smd, _, _, _ = calculate_metrics(test, model, trial_args)
         smd_scores.append(smd)
 
     # Return the average SMD across all regions (can be weighted if needed)
