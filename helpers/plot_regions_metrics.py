@@ -3,11 +3,9 @@ import json
 import matplotlib.pyplot as plt
 import argparse
 
-
 def extract_region_str(region):
     """Convert region list to readable string like [-1,0.5]x[-0.5,1]"""
     return f"[{region[0][0]},{region[0][1]}]x[{region[1][0]},{region[1][1]}]"
-
 
 def load_results(directory):
     files = sorted(
@@ -38,57 +36,51 @@ def load_results(directory):
 
     return metrics_by_region
 
+def plot_grouped_metrics(metrics_by_region, save_dir, sort_by="SMD"):
+    primary_metrics = ["SMD", "MAE", "MaxAE"]
+    intensity_metrics = ["Intensity Min", "Intensity Mean", "Intensity Max"]
 
-def plot_metrics(metrics_by_region, save_dir):
-    metric_names = list(next(iter(metrics_by_region.values())).keys())
+    # Filter and sort regions by the sort_by metric
+    filtered = [
+        (region, data)
+        for region, data in metrics_by_region.items()
+        if data.get(sort_by) is not None
+    ]
+    filtered.sort(key=lambda x: x[1][sort_by])
+    region_labels = [region for region, _ in filtered]
+    sorted_data = [data for _, data in filtered]
 
-    for metric in metric_names:
-        # Filter out regions where the metric is None
-        filtered = [
-            (region, data[metric])
-            for region, data in metrics_by_region.items()
-            if data.get(metric) is not None
-        ]
-        if not filtered:
-            print(f"⚠️ No data available for metric: {metric}")
-            continue
-
-        # Sort by the current metric
-        filtered.sort(key=lambda x: x[1])
-        region_labels = [region for region, _ in filtered]
-        values = [val for _, val in filtered]
-
-        plt.figure(figsize=(10, 6))
+    def plot_metrics(metric_list, filename_suffix):
+        plt.figure(figsize=(12, 6))
         x = range(len(region_labels))
-        plt.plot(x, values, marker='o', linestyle='-')
 
-        for i, val in enumerate(values):
-            plt.text(i, val, f"{val:.3f}", ha='center', va='bottom', fontsize=8)
+        for metric in metric_list:
+            values = [data.get(metric) for data in sorted_data]
+            if any(v is not None for v in values):
+                plt.plot(x, values, marker='o', linestyle='-', label=metric)
 
         plt.xticks(x, region_labels, rotation=45, ha='right')
-        plt.ylabel(metric)
-        plt.title(f"{metric} across Regions (sorted by {metric})")
+        plt.legend()
+        plt.title(f"Metrics across Regions (sorted by {sort_by})")
         plt.grid(True)
         plt.tight_layout()
-
-        metric_filename = f"{metric.replace(' ', '_')}_region_plot.png"
-        filename = os.path.join(save_dir, metric_filename)
+        filename = os.path.join(save_dir, f"region_plot_{filename_suffix}.png")
         plt.savefig(filename)
         print(f"✅ Saved plot: {filename}")
         plt.close()
 
+    plot_metrics(primary_metrics, "primary")
+    plot_metrics(intensity_metrics, "intensity")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description=(
-            "Plot metrics across region result files."
-        )
+    parser = argparse.ArgumentParser(description="Plot grouped metrics across region result files.")
+    parser.add_argument(
+        "--dir", type=str, required=True,
+        help="Directory containing results_region*.json files"
     )
     parser.add_argument(
-        "--dir",
-        type=str,
-        required=True,
-        help="Directory containing results_region*.json files"
+        "--sort-by", type=str, default="SMD",
+        help="Metric to sort regions by (default: SMD)"
     )
     args = parser.parse_args()
 
@@ -96,4 +88,4 @@ if __name__ == "__main__":
     if not metrics_by_region:
         print("⚠️ No valid region result files found.")
     else:
-        plot_metrics(metrics_by_region, args.dir)
+        plot_grouped_metrics(metrics_by_region, args.dir, args.sort_by)
