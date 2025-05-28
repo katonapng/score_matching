@@ -1,0 +1,72 @@
+import os
+import json
+import matplotlib.pyplot as plt
+import argparse
+import re
+
+def extract_region_str(region):
+    """Convert region list to readable string like [-1,0.5]x[-0.5,1]"""
+    return f"[{region[0][0]},{region[0][1]}]x[{region[1][0]},{region[1][1]}]"
+
+def load_results(directory):
+    files = sorted(f for f in os.listdir(directory) if f.startswith("results_region") and f.endswith(".json"))
+    metrics_by_region = {}
+
+    for file in files:
+        path = os.path.join(directory, file)
+        with open(path, 'r') as f:
+            content = json.load(f)
+
+        region = content["parameters"].get("region")
+        region_str = extract_region_str(region)
+
+        metrics = content.get("metrics", {})
+        flat_metrics = {
+            "SMD": metrics.get("SMD"),
+            "MAE": metrics.get("MAE"),
+            "MaxAE": metrics.get("MaxAE"),
+            "Intensity Min": metrics.get("intensity_stats", {}).get("min"),
+            "Intensity Mean": metrics.get("intensity_stats", {}).get("mean"),
+            "Intensity Max": metrics.get("intensity_stats", {}).get("max"),
+        }
+
+        metrics_by_region[region_str] = flat_metrics
+
+    return metrics_by_region
+
+def plot_metrics(metrics_by_region, save_dir):
+    metric_names = list(next(iter(metrics_by_region.values())).keys())
+    region_labels = list(metrics_by_region.keys())
+
+    for metric in metric_names:
+        values = [metrics_by_region[region].get(metric) for region in region_labels]
+
+        plt.figure(figsize=(10, 6))
+        x = range(len(region_labels))
+        plt.plot(x, values, marker='o', linestyle='-')
+
+        for i, val in enumerate(values):
+            if val is not None:
+                plt.text(i, val, f"{val:.3f}", ha='center', va='bottom', fontsize=8)
+
+        plt.xticks(x, region_labels, rotation=45, ha='right')
+        plt.ylabel(metric)
+        plt.title(f"{metric} across Regions")
+        plt.grid(True)
+        plt.tight_layout()
+
+        filename = os.path.join(save_dir, f"{metric.replace(' ', '_')}_region_plot.png")
+        plt.savefig(filename)
+        print(f"✅ Saved plot: {filename}")
+        plt.close()
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Plot metrics across region result files.")
+    parser.add_argument("--dir", type=str, required=True, help="Directory containing results_region*.json files")
+    args = parser.parse_args()
+
+    metrics_by_region = load_results(args.dir)
+    if not metrics_by_region:
+        print("⚠️ No valid region result files found.")
+    else:
+        plot_metrics(metrics_by_region, args.dir)
