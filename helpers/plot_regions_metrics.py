@@ -1,7 +1,10 @@
-import os
-import json
-import matplotlib.pyplot as plt
 import argparse
+import json
+import os
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+from matplotlib.ticker import MaxNLocator
 
 
 def extract_region_str(region):
@@ -40,10 +43,12 @@ def load_results(directory):
 
 
 def plot_metrics(metrics_by_region, save_dir):
+    sns.set_theme(style="whitegrid")
+
     metric_names = list(next(iter(metrics_by_region.values())).keys())
+    palette = sns.color_palette("Set2")  # Pleasant color palette
 
     for metric in metric_names:
-        # Filter out regions where the metric is None
         filtered = [
             (region, data[metric])
             for region, data in metrics_by_region.items()
@@ -53,27 +58,32 @@ def plot_metrics(metrics_by_region, save_dir):
             print(f"⚠️ No data available for metric: {metric}")
             continue
 
-        # Sort by the current metric
         filtered.sort(key=lambda x: x[1])
         region_labels = [region for region, _ in filtered]
         values = [val for _, val in filtered]
 
-        plt.figure(figsize=(10, 6))
+        plt.figure(figsize=(12, 6))
         x = range(len(region_labels))
-        plt.plot(x, values, marker='o', linestyle='-')
+        plt.plot(
+            x, values, marker='o', linestyle='-', color=palette[0], alpha=0.9,
+        )
 
         for i, val in enumerate(values):
-            plt.text(i, val, f"{val:.3f}", ha='center', va='bottom', fontsize=8)
+            plt.text(
+                i, val, f"{val:.3f}", ha='center', va='bottom', fontsize=9,
+            )
 
-        plt.xticks(x, region_labels, rotation=45, ha='right')
-        plt.ylabel(metric)
-        plt.title(f"{metric} across Regions (sorted by {metric})")
-        plt.grid(True)
+        plt.xticks(x, region_labels, rotation=45, ha='right', fontsize=9)
+        plt.yticks(fontsize=9)
+        plt.ylabel(metric, fontsize=11)
+        plt.title(f"{metric} across Regions", fontsize=13, weight='bold')
+        plt.grid(True, which='both', linestyle='--', linewidth=0.5, alpha=0.7)
+        plt.gca().yaxis.set_major_locator(MaxNLocator(integer=True))
         plt.tight_layout()
 
         metric_filename = f"{metric.replace(' ', '_')}_region_plot.png"
         filename = os.path.join(save_dir, metric_filename)
-        plt.savefig(filename)
+        plt.savefig(filename, dpi=150)
         print(f"✅ Saved plot: {filename}")
         plt.close()
 
