@@ -27,10 +27,46 @@ def calculate_score_matching_difference(
     return np.sum((gradient_real - gradient_pred) ** 2)
 
 
+def create_2d_grid(x_lower, x_upper, y_lower, y_upper):
+    # Generate linearly spaced points for x and y axes
+    x_points = torch.linspace(x_lower, x_upper, 20)
+    y_points = torch.linspace(y_lower, y_upper, 20)
+    
+    # Create a 2D grid using meshgrid
+    x_grid, y_grid = torch.meshgrid(x_points, y_points)
+
+    # Combine x and y grids into a single 2D grid of coordinates
+    grid = torch.stack([x_grid.flatten(), y_grid.flatten()], dim=1)
+
+    dx = (x_upper - x_lower) / (len(x_points) - 1)
+    dy = (y_upper - y_lower) / (len(y_points) - 1)
+
+    grid_spacing = dx * dy
+
+    return grid, grid_spacing
+
+
+def normalize_log_intensity(
+    log_intensity_pred: torch.Tensor,
+    x_region: torch.Tensor,
+    region_volume: float
+) -> torch.Tensor:
+    n_expected = torch.tensor(x_region.shape[0], dtype=torch.float32)
+
+    # Compute log integral of intensity over region using the grid
+    log_integral = torch.logsumexp(log_intensity_pred, dim=0)
+    log_integral -= torch.log(n_expected)
+    log_integral += torch.log(torch.tensor(region_volume, dtype=torch.float32))
+    
+    # Compute log(kappa)
+    log_kappa = torch.log(n_expected) - log_integral
+
+    # Normalize the log-intensity
+    return log_intensity_pred + log_kappa
+
+
 def calculate_metrics(loader, model, args):
-    smd_list = []
-    mae_list = []
-    maxae_list = []
+    smd_list, mae_list, maxae_list = [], [], []
     log_intensity_stats = {'min': [], 'mean': [], 'max': []}
 
     kappa = torch.tensor(args.kappa)
@@ -40,63 +76,55 @@ def calculate_metrics(loader, model, args):
         lengths = batch[0][:, 0, -1].to(dtype=torch.int64)
         cleaned_batch = remove_trailing_zeros(batch[0], lengths)
 
-        for x_test in cleaned_batch:
+        for x in cleaned_batch:
             if args.dimensions == 1:
-                x_test = x_test[:, 0].unsqueeze(1)
+                x = x[:, 0].unsqueeze(1)
                 lower, upper = args.region
-                region_mask = (x_test >= lower) & (x_test <= upper)
+                region_mask = (x >= lower) & (x <= upper)
                 region_volume = upper - lower
             else:
                 (x_lower, x_upper), (y_lower, y_upper) = args.region
                 region_mask = (
-                    (x_test[:, 0] >= x_lower) & (x_test[:, 0] <= x_upper) &
-                    (x_test[:, 1] >= y_lower) & (x_test[:, 1] <= y_upper)
+                    (x[:, 0] >= x_lower) & (x[:, 0] <= x_upper) &
+                    (x[:, 1] >= y_lower) & (x[:, 1] <= y_upper)
                 )
                 region_volume = (x_upper - x_lower) * (y_upper - y_lower)
+                grid, grid_spacing = create_2d_grid(x_lower, x_upper, y_lower, y_upper)
 
-            x_test_filtered = (
-                x_test[region_mask].unsqueeze(1)
+            x_region = (
+                x[region_mask].unsqueeze(1)
                 if args.dimensions == 1
-                else x_test[region_mask]
+                else x[region_mask]
             )
 
             # Compute true intensity
             if args.dimensions == 1:
-                log_intensity_real = torch.log(kappa) - x_test_filtered**2 / scale**2
-                model_input = x_test_filtered
+                log_intensity_real = torch.log(kappa) - x_region**2 / scale**2
+                model_input = x_region
             else:
                 log_intensity_real = torch.log(kappa) - (
-                    (x_test_filtered[:, 0]**2 + x_test_filtered[:, 1]**2) / scale**2
+                    (x_region[:, 0]**2 + x_region[:, 1]**2) / scale**2
                 )
-                model_input = x_test_filtered[:, :-1]  # exclude timestamp if present
+                model_input = x_region[:, :-1]  # exclude timestamp if present
 
             # Predict intensity
             log_intensity_pred = model(model_input).detach().squeeze(-1)
             if args.model == "Poisson_SM":
-                # log(kappa) = log(n_expected) - log_integral
-                n_expected = torch.tensor(x_test_filtered.shape[0])
-                log_integral = (
-                    torch.logsumexp(log_intensity_pred, dim=0)
-                    - torch.log(n_expected)
+                log_intensity_pred = normalize_log_intensity(
+                    log_intensity_pred, x_region, region_volume
                 )
-                log_integral += torch.log(torch.tensor(region_volume))
-                log_kappa = torch.log(n_expected) - log_integral
 
-                log_intensity_pred = log_intensity_pred + log_kappa
-
-            # Calculate SMD
+            # Calculate metrics
             smd = calculate_score_matching_difference(
                 log_intensity_real, log_intensity_pred, args.dimensions,
             )
             smd_list.append(smd)
 
-            # Calculate MAE
             mae = F.l1_loss(
                 log_intensity_pred, log_intensity_real, reduction='mean',
             )
             mae_list.append(mae.item())
 
-            # Calculate MaxAE (L-infinity norm)
             maxae = torch.max(
                 torch.abs(log_intensity_pred - log_intensity_real)
             ).item()
@@ -176,7 +204,18 @@ def plot_results(args, model, test_loader):
             intensity_pred = model(
                 torch.tensor(x_lin[:, None], dtype=torch.float32)
             ).squeeze()
-            intensity_pred = torch.exp(intensity_pred)
+            log_intensity_pred = intensity_pred.detach().squeeze(-1)
+            n_expected = torch.tensor(x.shape[0], dtype=torch.float32)
+            log_integral = (
+                torch.logsumexp(log_intensity_pred, dim=0)
+                - torch.log(torch.tensor(log_intensity_pred.shape[0]))
+            )
+            log_integral += torch.log(
+                torch.tensor(args.region[1] - args.region[0])
+            )  # 1D volume
+            log_kappa = torch.log(n_expected) - log_integral
+            log_intensity_pred = log_intensity_pred + log_kappa
+            intensity_pred = torch.exp(log_intensity_pred)
 
         intensity_real = (
             mirrored_intensity(x_lin[:, None], *args.region, kappa, scale)
@@ -232,10 +271,18 @@ def plot_results(args, model, test_loader):
             intensity_pred = model(
                 torch.tensor(grid_points, dtype=torch.float32)
             )
-            intensity_pred = torch.exp(intensity_pred).reshape(xx.shape)
+            log_intensity_pred = intensity_pred.squeeze(-1)
+            region_volume = torch.tensor(
+                (args.region[0][1] - args.region[0][0]) * (args.region[1][1] - args.region[1][0])
+            )
+            if args.model == "Poisson_SM":
+                log_intensity_pred = normalize_log_intensity(
+                    log_intensity_pred, grid_points, region_volume
+                )
+            intensity_pred = torch.exp(log_intensity_pred).reshape(xx.shape)
 
         intensity_real = kappa * np.exp(-(xx**2 + yy**2) / scale**2)
-        intensity_pred_np = intensity_pred.numpy()
+        # intensity_pred_np = intensity_pred.numpy()
 
         fig, axs = plt.subplots(1, 3, figsize=(24, 8), constrained_layout=True)
         titles = [
@@ -246,28 +293,31 @@ def plot_results(args, model, test_loader):
         cmaps = ['viridis', 'viridis', 'cividis']
 
         (xmin, xmax), (ymin, ymax) = args.region
-        region_mask = ((xx >= xmin) & (xx <= xmax) & (yy >= ymin) & (yy <= ymax))
+        # region_mask = ((xx >= xmin) & (xx <= xmax) & (yy >= ymin) & (yy <= ymax))
         opacity_mask = np.where(
             (xx >= xmin) & (xx <= xmax) & (yy >= ymin) & (yy <= ymax), 1.0, 0.5
         )
 
         # Get normalization factor only from original region
-        norm_factor_pred = intensity_pred_np[region_mask].max()
-        norm_factor_real = intensity_real[region_mask].max()
+        # norm_factor_pred = intensity_pred_np[region_mask].max()
+        # norm_factor_real = intensity_real[region_mask].max()
 
         # Normalize only by the original region's max
-        intensity_pred_norm = intensity_pred_np / norm_factor_pred
-        intensity_real_norm = intensity_real / norm_factor_real
+        # intensity_pred_norm = intensity_pred_np / norm_factor_pred
+        # intensity_real_norm = intensity_real / norm_factor_real
 
-        abs_diff = abs(intensity_pred_norm - intensity_real_norm)
+        # abs_diff = abs(intensity_pred_norm - intensity_real_norm)
+        abs_diff = abs(intensity_pred - intensity_real)
 
-        norm_pred = Normalize(vmin=0, vmax=1)
-        norm_real = Normalize(vmin=0, vmax=1)
-        norm_diff = Normalize(vmin=0, vmax=1)
+        # norm_pred = Normalize(vmin=0, vmax=1)
+        # norm_real = Normalize(vmin=0, vmax=1)
+        # norm_diff = Normalize(vmin=0, vmax=1)
 
         plots = [
-            intensity_pred_norm,
-            intensity_real_norm,
+            # intensity_pred_norm,
+            # intensity_real_norm,
+            intensity_pred,
+            intensity_real,
             abs_diff
         ]
 
@@ -277,12 +327,12 @@ def plot_results(args, model, test_loader):
 
             # Select the correct norm object
             norm_used = None
-            if i == 0:
-                norm_used = norm_pred
-            elif i == 1:
-                norm_used = norm_real
-            elif i == 2:
-                norm_used = norm_diff
+            # if i == 0:
+            #     norm_used = norm_pred
+            # elif i == 1:
+            #     norm_used = norm_real
+            # elif i == 2:
+            #     norm_used = norm_diff
 
             if args.mirror_boundary:
                 c = axs[i].imshow(
@@ -310,15 +360,27 @@ def plot_results(args, model, test_loader):
                 c, ax=axs[i],
                 label="Normalized Intensity" if i < 2 else "Difference"
             )
-
             if i in [0, 1]:
-                extrema = (intensity_pred if i == 0 else intensity_real)
-                axs[i].text(
-                    0.5, -0.15,
-                    f'Max: {extrema.max():.2f}\nMin: {extrema.min():.2f}',
-                    transform=axs[i].transAxes,
-                    ha='center', va='top', fontsize=14
-                )
+                # For predicted intensity (i == 0)
+                if i == 0:
+                    extrema = intensity_pred
+                    predicted_kappa = torch.exp(log_kappa).item()
+                    real_kappa = args.kappa
+                    axs[i].text(
+                        0.5, -0.15,
+                        f'Max: {extrema.max():.2f}\nMin: {extrema.min():.2f}\n'
+                        f'Real Kappa: {real_kappa:.5f}\nPredicted Kappa: {predicted_kappa:.5f}',
+                        transform=axs[i].transAxes,
+                        ha='center', va='top', fontsize=14
+                    )
+                else:
+                    extrema = intensity_real
+                    axs[i].text(
+                        0.5, -0.15,
+                        f'Max: {extrema.max():.2f}\nMin: {extrema.min():.2f}',
+                        transform=axs[i].transAxes,
+                        ha='center', va='top', fontsize=14
+                    )
 
     # ---- main plotting logic ----
     plt.figure(figsize=(10, 6))
