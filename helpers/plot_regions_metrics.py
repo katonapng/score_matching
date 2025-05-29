@@ -11,7 +11,6 @@ def extract_region_str(region):
     """Convert region list to readable string like [-1,0.5]x[-0.5,1]"""
     return f"[{region[0][0]},{region[0][1]}]x[{region[1][0]},{region[1][1]}]"
 
-
 def load_results(directory):
     files = sorted(
         f for f in os.listdir(directory)
@@ -87,18 +86,18 @@ def plot_metrics(metrics_by_region, save_dir):
         print(f"✅ Saved plot: {filename}")
         plt.close()
 
+    plot_metrics(primary_metrics, "primary")
+    plot_metrics(intensity_metrics, "intensity")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description=(
-            "Plot metrics across region result files."
-        )
+    parser = argparse.ArgumentParser(description="Plot grouped metrics across region result files.")
+    parser.add_argument(
+        "--dir", type=str, required=True,
+        help="Directory containing results_region*.json files"
     )
     parser.add_argument(
-        "--dir",
-        type=str,
-        required=True,
-        help="Directory containing results_region*.json files"
+        "--sort-by", type=str, default="SMD",
+        help="Metric to sort regions by (default: SMD)"
     )
     args = parser.parse_args()
 
@@ -106,4 +105,4 @@ if __name__ == "__main__":
     if not metrics_by_region:
         print("⚠️ No valid region result files found.")
     else:
-        plot_metrics(metrics_by_region, args.dir)
+        plot_grouped_metrics(metrics_by_region, args.dir, args.sort_by)
