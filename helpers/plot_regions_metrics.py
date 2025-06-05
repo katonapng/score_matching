@@ -1,15 +1,13 @@
-import argparse
-import json
 import os
-
+import json
 import matplotlib.pyplot as plt
-import seaborn as sns
-from matplotlib.ticker import MaxNLocator
+import argparse
 
 
 def extract_region_str(region):
     """Convert region list to readable string like [-1,0.5]x[-0.5,1]"""
     return f"[{region[0][0]},{region[0][1]}]x[{region[1][0]},{region[1][1]}]"
+
 
 def load_results(directory):
     files = sorted(
@@ -41,53 +39,42 @@ def load_results(directory):
     return metrics_by_region
 
 
-def plot_metrics(metrics_by_region, save_dir):
-    sns.set_theme(style="whitegrid")
+def plot_grouped_metrics(metrics_by_region, save_dir, sort_by="SMD"):
+    primary_metrics = ["SMD", "MAE", "MaxAE"]
+    intensity_metrics = ["Intensity Min", "Intensity Mean", "Intensity Max"]
 
-    metric_names = list(next(iter(metrics_by_region.values())).keys())
-    palette = sns.color_palette("Set2")  # Pleasant color palette
+    # Filter and sort regions by the sort_by metric
+    filtered = [
+        (region, data)
+        for region, data in metrics_by_region.items()
+        if data.get(sort_by) is not None
+    ]
+    filtered.sort(key=lambda x: x[1][sort_by])
+    region_labels = [region for region, _ in filtered]
+    sorted_data = [data for _, data in filtered]
 
-    for metric in metric_names:
-        filtered = [
-            (region, data[metric])
-            for region, data in metrics_by_region.items()
-            if data.get(metric) is not None
-        ]
-        if not filtered:
-            print(f"⚠️ No data available for metric: {metric}")
-            continue
-
-        filtered.sort(key=lambda x: x[1])
-        region_labels = [region for region, _ in filtered]
-        values = [val for _, val in filtered]
-
+    def plot_metrics(metric_list, filename_suffix):
         plt.figure(figsize=(12, 6))
         x = range(len(region_labels))
-        plt.plot(
-            x, values, marker='o', linestyle='-', color=palette[0], alpha=0.9,
-        )
 
-        for i, val in enumerate(values):
-            plt.text(
-                i, val, f"{val:.3f}", ha='center', va='bottom', fontsize=9,
-            )
+        for metric in metric_list:
+            values = [data.get(metric) for data in sorted_data]
+            if any(v is not None for v in values):
+                plt.plot(x, values, marker='o', linestyle='-', label=metric)
 
-        plt.xticks(x, region_labels, rotation=45, ha='right', fontsize=9)
-        plt.yticks(fontsize=9)
-        plt.ylabel(metric, fontsize=11)
-        plt.title(f"{metric} across Regions", fontsize=13, weight='bold')
-        plt.grid(True, which='both', linestyle='--', linewidth=0.5, alpha=0.7)
-        plt.gca().yaxis.set_major_locator(MaxNLocator(integer=True))
+        plt.xticks(x, region_labels, rotation=45, ha='right')
+        plt.legend()
+        plt.title(f"Metrics across Regions (sorted by {sort_by})")
+        plt.grid(True)
         plt.tight_layout()
-
-        metric_filename = f"{metric.replace(' ', '_')}_region_plot.png"
-        filename = os.path.join(save_dir, metric_filename)
-        plt.savefig(filename, dpi=150)
+        filename = os.path.join(save_dir, f"region_plot_{filename_suffix}.png")
+        plt.savefig(filename)
         print(f"✅ Saved plot: {filename}")
         plt.close()
 
     plot_metrics(primary_metrics, "primary")
     plot_metrics(intensity_metrics, "intensity")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Plot grouped metrics across region result files.")
