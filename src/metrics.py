@@ -31,19 +31,12 @@ def create_2d_grid(x_lower, x_upper, y_lower, y_upper):
     # Generate linearly spaced points for x and y axes
     x_points = torch.linspace(x_lower, x_upper, 20)
     y_points = torch.linspace(y_lower, y_upper, 20)
-    
-    # Create a 2D grid using meshgrid
+
     x_grid, y_grid = torch.meshgrid(x_points, y_points)
 
-    # Combine x and y grids into a single 2D grid of coordinates
     grid = torch.stack([x_grid.flatten(), y_grid.flatten()], dim=1)
 
-    dx = (x_upper - x_lower) / (len(x_points) - 1)
-    dy = (y_upper - y_lower) / (len(y_points) - 1)
-
-    grid_spacing = dx * dy
-
-    return grid, grid_spacing
+    return grid
 
 
 def normalize_log_intensity(
@@ -56,13 +49,30 @@ def normalize_log_intensity(
     # Compute log integral of intensity over region using the grid
     log_integral = torch.logsumexp(log_intensity_pred, dim=0)
     log_integral -= torch.log(n_expected)
-    log_integral += torch.log(torch.tensor(region_volume, dtype=torch.float32))
-    
+    log_integral += torch.log(torch.tensor(region_volume))
+
     # Compute log(kappa)
     log_kappa = torch.log(n_expected) - log_integral
 
     # Normalize the log-intensity
-    return log_intensity_pred + log_kappa
+    return log_kappa
+
+
+def normalize_log_intensity_grid(
+    log_intensity_pred: torch.Tensor,
+    x_region: torch.Tensor,
+    region_volume: float
+) -> torch.Tensor:
+    n_expected = torch.tensor(x_region.shape[0], dtype=torch.float32)
+    N = log_intensity_pred.shape[0]
+    log_dx = torch.log(torch.tensor(region_volume)) - torch.log(torch.tensor(N))
+
+    log_integral = torch.logsumexp(log_intensity_pred, dim=0) + log_dx
+
+    log_kappa = torch.log(n_expected) - log_integral
+
+    # Normalize
+    return log_kappa
 
 
 def calculate_metrics(loader, model, args):
@@ -89,7 +99,7 @@ def calculate_metrics(loader, model, args):
                     (x[:, 1] >= y_lower) & (x[:, 1] <= y_upper)
                 )
                 region_volume = (x_upper - x_lower) * (y_upper - y_lower)
-                grid, grid_spacing = create_2d_grid(x_lower, x_upper, y_lower, y_upper)
+                grid = create_2d_grid(x_lower, x_upper, y_lower, y_upper)
 
             x_region = (
                 x[region_mask].unsqueeze(1)
@@ -110,9 +120,14 @@ def calculate_metrics(loader, model, args):
             # Predict intensity
             log_intensity_pred = model(model_input).detach().squeeze(-1)
             if args.model == "Poisson_SM":
-                log_intensity_pred = normalize_log_intensity(
-                    log_intensity_pred, x_region, region_volume
+                # log_kappa = normalize_log_intensity(
+                #     log_intensity_pred, x_region, region_volume
+                # )
+                log_intensity_pred_grid = model(grid).detach().squeeze(-1)
+                log_kappa = normalize_log_intensity_grid(
+                    log_intensity_pred_grid, x_region, region_volume
                 )
+                log_intensity_pred = log_intensity_pred + log_kappa
 
             # Calculate metrics
             smd = calculate_score_matching_difference(
@@ -152,13 +167,6 @@ def plot_results(args, model, test_loader):
         sample = test_loader.random_sample()[0]
         lengths = sample[:, 0, -1].to(dtype=torch.int64)
         return remove_trailing_zeros(sample, lengths)[0]
-
-    def prepare_grid(x, y, num_points=100):
-        x_lin = np.linspace(x.min(), x.max(), num_points)
-        y_lin = np.linspace(y.min(), y.max(), num_points)
-        xx, yy = np.meshgrid(x_lin, y_lin)
-        grid_points = np.stack([xx.ravel(), yy.ravel()], axis=1)
-        return xx, yy, grid_points
 
     def plot_weight_function(x_lin, weight_fn_name):
         temp = torch.tensor(x_lin[:, None], dtype=torch.float32).unsqueeze(0)
@@ -264,62 +272,43 @@ def plot_results(args, model, test_loader):
 
     def plot_2d(x):
         kappa, scale = args.kappa, args.dist_params.get("scale")
-        x_vals, y_vals = x[:, 0].numpy(), x[:, 1].numpy()
-        xx, yy, grid_points = prepare_grid(x_vals, y_vals)
+        (x_lower, x_upper), (y_lower, y_upper) = args.region
+
+        # Prepare 2D grid using the same method as in metric calculations
+        grid = create_2d_grid(x_lower, x_upper, y_lower, y_upper)
+        xx = grid[:, 0].reshape(20, 20)
+        yy = grid[:, 1].reshape(20, 20)
 
         with torch.no_grad():
-            intensity_pred = model(
-                torch.tensor(grid_points, dtype=torch.float32)
-            )
-            log_intensity_pred = intensity_pred.squeeze(-1)
-            region_volume = torch.tensor(
-                (args.region[0][1] - args.region[0][0]) * (args.region[1][1] - args.region[1][0])
-            )
-            if args.model == "Poisson_SM":
-                log_intensity_pred = normalize_log_intensity(
-                    log_intensity_pred, grid_points, region_volume
-                )
-            intensity_pred = torch.exp(log_intensity_pred).reshape(xx.shape)
+            log_intensity_pred = model(grid).squeeze(-1)
+            region_volume = (x_upper - x_lower) * (y_upper - y_lower)
 
-        intensity_real = kappa * np.exp(-(xx**2 + yy**2) / scale**2)
-        # intensity_pred_np = intensity_pred.numpy()
+            if args.model == "Poisson_SM":
+                # log_kappa = normalize_log_intensity(
+                #     log_intensity_pred, x, region_volume
+                # )
+                log_kappa = normalize_log_intensity_grid(
+                    log_intensity_pred, x, region_volume,
+                )
+                log_intensity_pred = log_intensity_pred + log_kappa
+            intensity_pred = torch.exp(log_intensity_pred).reshape(20, 20)
+
+        # True intensity over grid
+        intensity_real = kappa * torch.exp(-(grid[:, 0]**2 + grid[:, 1]**2) / scale**2)
+        intensity_real = intensity_real.reshape(20, 20)
+
+        abs_diff = torch.abs(intensity_pred - intensity_real)
 
         fig, axs = plt.subplots(1, 3, figsize=(24, 8), constrained_layout=True)
         titles = [
             r'Predicted Intensity $\rho(x)$',
             'True Intensity',
-            'Difference Between Actual and Predicted Intensities'
+            'Difference (Abs)'
         ]
         cmaps = ['viridis', 'viridis', 'cividis']
+        plots = [intensity_pred, intensity_real, abs_diff]
 
-        (xmin, xmax), (ymin, ymax) = args.region
-        # region_mask = ((xx >= xmin) & (xx <= xmax) & (yy >= ymin) & (yy <= ymax))
-        opacity_mask = np.where(
-            (xx >= xmin) & (xx <= xmax) & (yy >= ymin) & (yy <= ymax), 1.0, 0.5
-        )
-
-        # Get normalization factor only from original region
-        # norm_factor_pred = intensity_pred_np[region_mask].max()
-        # norm_factor_real = intensity_real[region_mask].max()
-
-        # Normalize only by the original region's max
-        # intensity_pred_norm = intensity_pred_np / norm_factor_pred
-        # intensity_real_norm = intensity_real / norm_factor_real
-
-        # abs_diff = abs(intensity_pred_norm - intensity_real_norm)
-        abs_diff = abs(intensity_pred - intensity_real)
-
-        # norm_pred = Normalize(vmin=0, vmax=1)
-        # norm_real = Normalize(vmin=0, vmax=1)
-        # norm_diff = Normalize(vmin=0, vmax=1)
-
-        plots = [
-            # intensity_pred_norm,
-            # intensity_real_norm,
-            intensity_pred,
-            intensity_real,
-            abs_diff
-        ]
+        x_vals, y_vals = x[:, 0].numpy(), x[:, 1].numpy()
 
         for i, (plot_data, title, cmap) in enumerate(zip(plots, titles, cmaps)):
             if isinstance(plot_data, torch.Tensor):
