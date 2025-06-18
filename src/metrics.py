@@ -2,11 +2,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn.functional as F
-from matplotlib.colors import Normalize
 
 from src.models import WindowParams
 from src.utils import remove_trailing_zeros
-from src.weight_functions import distance_window, gaussian_window
+from src.weight_functions import (distance_window, gaussian_window,
+                                  smooth_distance_window)
 
 
 def calculate_score_matching_difference(
@@ -27,16 +27,29 @@ def calculate_score_matching_difference(
     return np.sum((gradient_real - gradient_pred) ** 2)
 
 
-def create_2d_grid(x_lower, x_upper, y_lower, y_upper):
-    # Generate linearly spaced points for x and y axes
-    x_points = torch.linspace(x_lower, x_upper, 20)
-    y_points = torch.linspace(y_lower, y_upper, 20)
+def create_grid(x_lower, x_upper, y_lower=None, y_upper=None, num_points=20):
+    """
+    Create a grid of points in 1D or 2D, inferred from the presence of y_lower and y_upper.
 
-    x_grid, y_grid = torch.meshgrid(x_points, y_points)
+    Parameters:
+        x_lower (float): Lower bound for x.
+        x_upper (float): Upper bound for x.
+        y_lower (float, optional): Lower bound for y. If None, a 1D grid is created.
+        y_upper (float, optional): Upper bound for y. If None, a 1D grid is created.
+        num_points (int): Number of points per axis.
 
-    grid = torch.stack([x_grid.flatten(), y_grid.flatten()], dim=1)
+    Returns:
+        torch.Tensor: Grid of shape (num_points, 1) for 1D or (num_points**2, 2) for 2D.
+    """
+    x_points = torch.linspace(x_lower, x_upper, num_points)
 
-    return grid
+    if y_lower is None or y_upper is None:
+        return x_points.unsqueeze(1)  # Shape: (num_points, 1)
+    else:
+        y_points = torch.linspace(y_lower, y_upper, num_points)
+        x_grid, y_grid = torch.meshgrid(x_points, y_points, indexing="ij")
+        grid = torch.stack([x_grid.flatten(), y_grid.flatten()], dim=1)  # Shape: (num_points^2, 2)
+        return grid
 
 
 def normalize_log_intensity(
@@ -92,6 +105,7 @@ def calculate_metrics(loader, model, args):
                 lower, upper = args.region
                 region_mask = (x >= lower) & (x <= upper)
                 region_volume = upper - lower
+                grid = create_grid(lower, upper)
             else:
                 (x_lower, x_upper), (y_lower, y_upper) = args.region
                 region_mask = (
@@ -99,7 +113,7 @@ def calculate_metrics(loader, model, args):
                     (x[:, 1] >= y_lower) & (x[:, 1] <= y_upper)
                 )
                 region_volume = (x_upper - x_lower) * (y_upper - y_lower)
-                grid = create_2d_grid(x_lower, x_upper, y_lower, y_upper)
+                grid = create_grid(x_lower, x_upper, y_lower, y_upper)
 
             x_region = (
                 x[region_mask].unsqueeze(1)
@@ -182,6 +196,13 @@ def plot_results(args, model, test_loader):
                 mirror_boundary=args.mirror_boundary,
             )
             weights = distance_window(temp, params)
+        elif weight_fn_name == "smooth_distance_window":
+            params = WindowParams(
+                region=args.region,
+                percent=args.percent,
+                mirror_boundary=args.mirror_boundary,
+            )
+            weights = smooth_distance_window(temp, params)
         else:
             return
 
@@ -275,7 +296,7 @@ def plot_results(args, model, test_loader):
         (x_lower, x_upper), (y_lower, y_upper) = args.region
 
         # Prepare 2D grid using the same method as in metric calculations
-        grid = create_2d_grid(x_lower, x_upper, y_lower, y_upper)
+        grid = create_grid(x_lower, x_upper, y_lower, y_upper)
         xx = grid[:, 0].reshape(20, 20)
         yy = grid[:, 1].reshape(20, 20)
 
@@ -314,26 +335,24 @@ def plot_results(args, model, test_loader):
             if isinstance(plot_data, torch.Tensor):
                 plot_data = plot_data.numpy()
 
-            # Select the correct norm object
-            norm_used = None
-            # if i == 0:
-            #     norm_used = norm_pred
-            # elif i == 1:
-            #     norm_used = norm_real
-            # elif i == 2:
-            #     norm_used = norm_diff
-
             if args.mirror_boundary:
+                opacity_mask = np.where(
+                    (xx >= x_lower) & (xx <= x_upper) &
+                    (yy >= y_lower) & (yy <= y_upper),
+                    1.0, 0.5
+                )
                 c = axs[i].imshow(
                     plot_data,
-                    extent=[x_vals.min(), x_vals.max(), y_vals.min(), y_vals.max()],
+                    extent=[
+                        x_vals.min(), x_vals.max(), y_vals.min(), y_vals.max()
+                    ],
                     origin='lower', cmap=cmap, alpha=opacity_mask,
-                    aspect='auto', norm=norm_used
+                    aspect='auto',
                 )
             else:
                 c = axs[i].contourf(
                     xx, yy, plot_data, levels=50, alpha=0.8,
-                    cmap=cmap, norm=norm_used
+                    cmap=cmap,
                 )
 
             axs[i].scatter(
