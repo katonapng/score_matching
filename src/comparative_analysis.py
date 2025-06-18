@@ -13,7 +13,9 @@ from src.utils import (check_file_existence, convert_to_native,
                        generate_training_data_poisson, get_region_dimension,
                        read_args_from_file)
 from src.weight_functions import (distance_window, distance_window_derivative,
-                                  gaussian_window, gaussian_window_derivative)
+                                  gaussian_window, gaussian_window_derivative,
+                                  smooth_distance_window,
+                                  smooth_distance_window_derivative)
 
 
 def track_memory():
@@ -78,6 +80,9 @@ def main(args):
     elif args.weight_function == "distance":
         args.weight_function = distance_window
         args.weight_derivative = distance_window_derivative
+    elif args.weight_function == "smooth_distance":
+        args.weight_function = smooth_distance_window
+        args.weight_derivative = smooth_distance_window_derivative
     else:
         args.weight_function = None
         args.weight_derivative = None

@@ -163,3 +163,83 @@ def distance_window_derivative(x, params: WindowParams):
 
     grad = grad * L_expand * mask.float()
     return grad
+
+
+def smoothstep(t):
+    return 3 * t**2 - 2 * t**3
+
+
+def smooth_distance_window(x, params: WindowParams):
+    region = params.region
+    percent = params.percent
+    mirror = params.mirror_boundary
+
+    if isinstance(region[0], (int, float)):
+        a = torch.tensor([region[0]], dtype=torch.float32)
+        b = torch.tensor([region[1]], dtype=torch.float32)
+    else:
+        a = torch.tensor([r[0] for r in region], dtype=torch.float32)
+        b = torch.tensor([r[1] for r in region], dtype=torch.float32)
+
+    if mirror:
+        half_region = (b - a) / 2
+        a_ext = a - half_region
+        b_ext = b + half_region
+        dist_to_a = torch.abs(x - a_ext)
+        dist_to_b = torch.abs(x - b_ext)
+        width = b - a
+    else:
+        dist_to_a = torch.abs(x - a)
+        dist_to_b = torch.abs(x - b)
+        width = b - a
+
+    g = torch.minimum(dist_to_a, dist_to_b)
+    delta = percent * width / 100.0
+
+    t = torch.clamp(g / delta, min=0.0, max=1.0)
+    return smoothstep(t)
+
+
+def smooth_distance_window_derivative(x, params: WindowParams):
+    region = params.region
+    percent = params.percent
+    mirror = params.mirror_boundary
+
+    if isinstance(region[0], (int, float)):
+        a = torch.tensor([region[0]], dtype=torch.float32)
+        b = torch.tensor([region[1]], dtype=torch.float32)
+    else:
+        a = torch.tensor([r[0] for r in region], dtype=torch.float32)
+        b = torch.tensor([r[1] for r in region], dtype=torch.float32)
+
+    if mirror:
+        half_region = (b - a) / 2
+        a_ext = a - half_region
+        b_ext = b + half_region
+        dist_to_a = torch.abs(x - a_ext)
+        dist_to_b = torch.abs(x - b_ext)
+        width = b - a
+        sign_a = torch.sign(x - a_ext)
+        sign_b = torch.sign(x - b_ext)
+    else:
+        dist_to_a = torch.abs(x - a)
+        dist_to_b = torch.abs(x - b)
+        width = b - a
+        sign_a = torch.sign(x - a)
+        sign_b = torch.sign(x - b)
+
+    g = torch.minimum(dist_to_a, dist_to_b)
+    delta = percent * width / 100.0
+    t = torch.clamp(g / delta, min=0.0, max=1.0)
+
+    # Derivative of smoothstep w.r.t t: 6t(1 - t)
+    ds_dt = 6 * t * (1 - t)
+
+    grad = torch.zeros_like(x)
+    mask_a = dist_to_a < dist_to_b
+    mask_b = dist_to_b < dist_to_a
+
+    grad[mask_a] = sign_a.expand_as(x)[mask_a]
+    grad[mask_b] = sign_b.expand_as(x)[mask_b]
+
+    return grad * (ds_dt / delta)

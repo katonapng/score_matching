@@ -27,7 +27,8 @@ def get_shared_parser():
         default=None,
         choices=["gaussian", "distance"],
         type=str,
-        help="Weight function to use: ['gaussian', 'distance']",
+        help=("Weight function to use: ['gaussian', 'distance', "
+              "'smooth_distance']"),
     )
     parser.add_argument(
         "--dist_params",
