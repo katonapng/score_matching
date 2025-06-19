@@ -16,8 +16,9 @@ from src.weight_functions import (distance_window, distance_window_derivative,
 
 def main(args):
     args.dimensions = get_region_dimension(args.region)
+    workspace = args.workspace if hasattr(args, 'workspace') else None
     args.output_json, args.output_image, args.gradient_dir, args.loss_image = \
-        generate_output_filenames(args)
+        generate_output_filenames(args, workspace)
     check_file_existence(args.output_json, args.output_image)
 
     if args.weight_function == "gaussian":

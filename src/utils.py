@@ -32,9 +32,9 @@ def get_region_dimension(region):
         return 1
 
 
-def generate_output_filenames(args):
+def generate_output_filenames(args, workspace=None):
     # Base path for 1d or 2d results
-    base_path = "results/1d" if args.dimensions == 1 else "results/2d"
+    base_path = f"{workspace}/results/1d/" if args.dimensions == 1 else f"{workspace}/results/2d/"
 
     # Convert model name to folder shorthand
     model_folder = "SM" if args.model == "Poisson_SM" else "MLE"
@@ -106,6 +106,8 @@ def convert_to_native(obj):
         return int(obj)
     elif isinstance(obj, (np.floating, np.float64)):
         return float(obj)
+    elif isinstance(obj, type):  # Handle types explicitly
+        return str(obj)  # Convert the type object to a string (class name)
     else:
         return obj
 
