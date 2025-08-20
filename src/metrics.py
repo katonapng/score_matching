@@ -18,8 +18,6 @@ def calculate_score_matching_difference(
     """
     log_intensity_real = np.asarray(log_intensity_real)
     log_intensity_pred = np.asarray(log_intensity_pred)
-    if dim == 1:
-        log_intensity_real = log_intensity_real.squeeze(-1)
 
     gradient_real = np.gradient(log_intensity_real)
     gradient_pred = np.gradient(log_intensity_pred)
@@ -124,13 +122,13 @@ def calculate_metrics(loader, model, args):
             # Compute true intensity
             if args.dimensions == 1:
                 log_intensity_real = torch.log(kappa) - x_region**2 / scale**2
+                log_intensity_real = log_intensity_real.squeeze(-1)
                 model_input = x_region
             else:
                 log_intensity_real = torch.log(kappa) - (
                     (x_region[:, 0]**2 + x_region[:, 1]**2) / scale**2
                 )
-                model_input = x_region[:, :-1]  # exclude timestamp if present
-
+                model_input = x_region
             # Predict intensity
             log_intensity_pred = model(model_input).detach().squeeze(-1)
             if args.model == "Poisson_SM":
