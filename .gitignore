@@ -167,6 +167,8 @@ outputs/
 data/
 plots/
 results/
+helpers/
+logs/
 configs/
 run_results*/
 *.json
