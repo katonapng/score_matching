@@ -168,3 +168,6 @@ data/
 plots/
 results/
 configs/
+run_results*/
+*.json
+*.png
