@@ -78,7 +78,7 @@ class Poisson_SM(nn.Module):
             weight = (psi_x * grad_h).sum(dim=-1)
         else:
             h = torch.ones_like(x)
-            weight = 0
+            weight = torch.zeros_like(x).sum(dim=-1)
 
         norm_squared = (psi_x ** 2 * h).sum(dim=-1)
 
@@ -101,14 +101,7 @@ class Poisson_SM(nn.Module):
             total_loss += self.alpha * (log_intensity ** 2)
         total_loss = total_loss.sum(dim=-1) / lengths
 
-        return (
-            total_loss.mean(),
-            0.5 * norm_squared.mean(),
-            divergence.mean(),
-            weight.mean(),
-            log_intensity.mean(),
-            psi_x.mean(),
-        )
+        return total_loss.mean()
 
 
 class Poisson_MLE(nn.Module):
@@ -217,12 +210,7 @@ def optimize_nn(loader_train, loader_val, nn_model, args, trial=None):
         mask = torch.arange(max_length).unsqueeze(0)
         mask = mask < lengths.unsqueeze(1)
 
-        loss_output = model.loss(padded_x, lengths, mask)
-        if isinstance(loss_output, tuple):
-            loss, norm_squared, divergence, weight, log_intensity, psi_x = loss_output
-        else:
-            loss = loss_output
-            norm_squared = divergence = weight = log_intensity = psi_x = torch.tensor(0.0)
+        loss = model.loss(padded_x, lengths, mask)
 
         if l2_regularization:
             l2_lambda = 1e-3
@@ -232,7 +220,7 @@ def optimize_nn(loader_train, loader_val, nn_model, args, trial=None):
             )
             loss = loss + l2_lambda * l2_norm
 
-        return loss, norm_squared, divergence, weight, log_intensity, psi_x
+        return loss
 
     def run_epoch(
         loader_train, loader_val, model, optimizer=None,
@@ -240,44 +228,29 @@ def optimize_nn(loader_train, loader_val, nn_model, args, trial=None):
     ):
         model.train()
         loss_sum = 0.0
-        norm_squared_sum = 0.0
-        divergence_sum = 0.0
-        weight_sum = 0.0
-        log_intensity_sum = 0.0
-        psi_x_sum = 0.0
         for X_batch in loader_train:
             optimizer.zero_grad()
-            loss, norm_squared, divergence, weight, log_intensity, psi_x = compute_loss(
+            loss= compute_loss(
                 model, X_batch, l2_regularization=args.l2_regularization
             )
             loss.backward()
             optimizer.step()
             loss_sum += loss.item()
-            norm_squared_sum += norm_squared.item()
-            divergence_sum += divergence.item()
-            weight_sum += weight.item()
-            log_intensity_sum += log_intensity.item()
-            psi_x_sum += psi_x.item()
 
         avg_train_loss = loss_sum / train_samples if train_samples > 0 else 0.0
-        avg_norm_squared = norm_squared_sum / train_samples if train_samples > 0 else 0.0
-        avg_divergence = divergence_sum / train_samples if train_samples > 0 else 0.0
-        avg_weight = weight_sum / train_samples if train_samples > 0 else 0.0
-        avg_log_intensity = log_intensity_sum / train_samples if train_samples > 0 else 0.0
-        avg_psi_x = psi_x_sum / train_samples if train_samples > 0 else 0.0
 
         model.eval()
         val_loss_sum = 0.0
         with torch.enable_grad():
             for X_batch in loader_val:
-                loss, norm_squared, divergence, weight, log_intensity, psi_x = compute_loss(
+                loss = compute_loss(
                     model, X_batch, l2_regularization=args.l2_regularization
                 )
                 val_loss_sum += loss.item()
 
         avg_val_loss = val_loss_sum / val_samples if val_samples > 0 else 0.0
 
-        return avg_train_loss, avg_val_loss, avg_norm_squared, avg_divergence, avg_weight, avg_log_intensity, avg_psi_x
+        return avg_train_loss, avg_val_loss
 
     if args.optuna:
         # n_layers = trial.suggest_int("n_layers", 1, 4)
@@ -307,8 +280,6 @@ def optimize_nn(loader_train, loader_val, nn_model, args, trial=None):
 
     frames = []
     train_losses, val_losses = [], []
-    train_log_intensity, train_psi_x = [], []
-    train_norm_squared, train_divergence, train_weight = [], [], []
     train_samples = len(loader_train)
     val_samples = len(loader_val)
     best_val_smd = float('inf')
@@ -325,19 +296,13 @@ def optimize_nn(loader_train, loader_val, nn_model, args, trial=None):
         start_time = time.time()
 
         # Training and Validation phase
-        avg_train_loss, avg_val_loss, avg_norm_squared, avg_divergence, \
-            avg_weight, avg_log_intensity, avg_psi_x = run_epoch(
+        avg_train_loss, avg_val_loss, = run_epoch(
                 loader_train, loader_val, model, optimizer,
                 train_samples=train_samples,
                 val_samples=val_samples,
             )
         train_losses.append(avg_train_loss)
         val_losses.append(avg_val_loss)
-        train_norm_squared.append(avg_norm_squared)
-        train_divergence.append(avg_divergence)
-        train_weight.append(avg_weight)
-        train_log_intensity.append(avg_log_intensity)
-        train_psi_x.append(avg_psi_x)
 
         if args.plot_gradients and epoch % 5 == 0:
             visualize_gradients(model, args, epoch, frames)
@@ -374,9 +339,4 @@ def optimize_nn(loader_train, loader_val, nn_model, args, trial=None):
         model,
         train_losses,
         val_losses,
-        train_norm_squared,
-        train_divergence,
-        train_weight,
-        train_log_intensity,
-        train_psi_x,
     )

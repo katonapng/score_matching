@@ -92,7 +92,6 @@ def calculate_metrics(loader, model, args):
 
     kappa = torch.tensor(args.kappa)
     scale = args.dist_params.get("scale")
-
     for batch in loader:
         lengths = batch[0][:, 0, -1].to(dtype=torch.int64)
         cleaned_batch = remove_trailing_zeros(batch[0], lengths)
@@ -128,10 +127,10 @@ def calculate_metrics(loader, model, args):
                 log_intensity_real = torch.log(kappa) - (
                     (x_region[:, 0]**2 + x_region[:, 1]**2) / scale**2
                 )
-                model_input = x_region
+                model_input =  x_region[:, :2]
             # Predict intensity
             log_intensity_pred = model(model_input).detach().squeeze(-1)
-            if args.model == "Poisson_SM":
+            if model.__class__.__name__ == "Poisson_SM":
                 # log_kappa = normalize_log_intensity(
                 #     log_intensity_pred, x_region, region_volume
                 # )
@@ -330,6 +329,7 @@ def plot_results(args, model, test_loader):
         x_vals, y_vals = x[:, 0].numpy(), x[:, 1].numpy()
 
         for i, (plot_data, title, cmap) in enumerate(zip(plots, titles, cmaps)):
+            plot_data = plot_data / plot_data.max()  # Normalize for plotting
             if isinstance(plot_data, torch.Tensor):
                 plot_data = plot_data.numpy()
 
@@ -402,78 +402,25 @@ def plot_results(args, model, test_loader):
 
 
 def plot_losses(
-        train_losses, val_losses, norm_squared_list, 
-        divergence_list, weight_list, log_density_list, 
-        psi_x_list, args
+        train_losses, val_losses, args
 ):
     epochs = range(1, len(train_losses) + 1)
 
-    fig, axs = plt.subplots(5, 1, figsize=(10, 14), sharex=True)
+    fig, ax = plt.subplots(figsize=(10, 6))
 
-    # Subplot 1: Train Loss and Validation Loss
+    # Plot Train Loss and Validation Loss
     color1 = 'tab:blue'
     color2 = 'tab:red'
-    ax1 = axs[0]
-    ax1.set_ylabel('Train Loss', color=color1)
-    ax1.plot(epochs, train_losses, color=color1, label='Train Loss')
-    ax1.tick_params(axis='y', labelcolor=color1)
-    ax1.grid(True)
+    ax.plot(epochs, train_losses, color=color1, label='Train Loss')
+    ax.plot(epochs, val_losses, color=color2, label='Validation Loss')
+    ax.set_ylabel('Loss')
+    ax.tick_params(axis='y')
+    ax.grid(True)
 
-    ax2 = ax1.twinx()
-    ax2.set_ylabel('Validation Loss', color=color2)
-    ax2.plot(epochs, val_losses, color=color2, label='Validation Loss')
-    ax2.tick_params(axis='y', labelcolor=color2)
+    # Set title and legend
+    ax.set_title('Training and Validation Loss over Epochs')
+    ax.legend()
 
-    ax1.set_title('Training and Validation Loss over Epochs')
-
-    # Subplot 2: norm_squared + log_density
-    ax3 = axs[1]
-    ax3.plot(epochs, norm_squared_list, label='Norm Squared', color='tab:green')
-    ax3.set_ylabel('Norm Squared', color='tab:green')
-    ax3.tick_params(axis='y', labelcolor='tab:green')
-    ax3.grid(True)
-
-    ax3b = ax3.twinx()
-    ax3b.plot(epochs, log_density_list, label='Log Density', color='tab:brown', linestyle='--')
-    ax3b.set_ylabel('Log Density', color='tab:brown')
-    ax3b.tick_params(axis='y', labelcolor='tab:brown')
-
-    # Subplot 3: divergence + log_density
-    ax4 = axs[2]
-    ax4.plot(epochs, divergence_list, label='Divergence', color='tab:orange')
-    ax4.set_ylabel('Divergence', color='tab:orange')
-    ax4.tick_params(axis='y', labelcolor='tab:orange')
-    ax4.grid(True)
-
-    ax4b = ax4.twinx()
-    ax4b.plot(epochs, log_density_list, label='Log Density', color='tab:brown', linestyle='--')
-    ax4b.set_ylabel('Log Density', color='tab:brown')
-    ax4b.tick_params(axis='y', labelcolor='tab:brown')
-
-    # Subplot 4: weight + log_density
-    ax5 = axs[3]
-    ax5.plot(epochs, weight_list, label='Weight', color='tab:purple')
-    ax5.set_ylabel('Weight', color='tab:purple')
-    ax5.tick_params(axis='y', labelcolor='tab:purple')
-    ax5.grid(True)
-
-    ax5b = ax5.twinx()
-    ax5b.plot(epochs, log_density_list, label='Log Density', color='tab:brown', linestyle='--')
-    ax5b.set_ylabel('Log Density', color='tab:brown')
-    ax5b.tick_params(axis='y', labelcolor='tab:brown')
-
-    # Subplot 5: psi_x + log_density
-    ax6 = axs[4]
-    ax6.plot(epochs, psi_x_list, label='Psi(x)', color='tab:cyan')
-    ax6.set_ylabel('Psi(x)', color='tab:cyan')
-    ax6.set_xlabel('Epoch')
-    ax6.tick_params(axis='y', labelcolor='tab:cyan')
-    ax6.grid(True)
-
-    ax6b = ax6.twinx()
-    ax6b.plot(epochs, log_density_list, label='Log Density', color='tab:brown', linestyle='--')
-    ax6b.set_ylabel('Log Density', color='tab:brown')
-    ax6b.tick_params(axis='y', labelcolor='tab:brown')
-
+    # Save plot
     plt.tight_layout()
     plt.savefig(args.loss_image)

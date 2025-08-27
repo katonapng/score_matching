@@ -51,8 +51,7 @@ def main(args):
     
     # Train model with progress tracking
     print("Starting training...")
-    model, train_losses, val_losses, norm_squared, divergence, weight, \
-        log_density, psi_x = optimize_nn(
+    model, train_losses, val_losses = optimize_nn(
             args=args,
             loader_train=train,
             loader_val=val,
@@ -61,10 +60,7 @@ def main(args):
 
     # Generate and save training loss and validation smd plot
     print("Generating training loss and validation loss plot...")
-    plot_losses(
-        train_losses, val_losses, norm_squared, divergence, weight,
-        log_density, psi_x, args,
-    )
+    plot_losses(train_losses, val_losses, args)
     print("Plot saved to", args.loss_image)
 
     # Generate and save plot

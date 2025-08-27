@@ -71,6 +71,7 @@ BASE_CONFIGS = {
         "model": "Poisson_SM",
         # "model": "Poisson_MLE",
         "weight_function": "distance",
+        # "weight_function": None,
         "mirror_boundary": False,
         "dist_params": {"n_expected": 100, "scale": 0.5},
         "hidden_dims": [32],
@@ -83,6 +84,7 @@ BASE_CONFIGS = {
         "epochs": 200,
         "intensity_penalty": False,
         "folder_suffix": "poisson_experiment",
+        "percent": 8,
     },
     "comparative_analysis": {
         "model": "Poisson_MLE",
@@ -91,6 +93,7 @@ BASE_CONFIGS = {
         "dist_params": {"n_expected": 100, "scale": 0.5},
         "hidden_dims": [32],
         "patience": 20,
+        "percent": 8,
         "learning_rate": 1e-03,
         "plot_gradients": False,
         "plot_losses": False,
@@ -123,7 +126,7 @@ def save_config_and_run(
     os.makedirs(os.path.dirname(config_filename), exist_ok=True)
     if region_key and region:
         config[region_key] = region
-    with open(config_filename, "w") as f:
+    with open(config_filename, "w+") as f:
         json.dump(config, f, indent=4)
 
     print(f"Running: {script_name} with config {config_filename}")
@@ -163,7 +166,7 @@ def main():
             )
 
     elif args.script == "comparative_analysis":
-        for i, region in enumerate(REGION_VALUES_1D):
+        for i, region in enumerate(REGION_VALUES_2D):
             save_config_and_run(
                 args.script, config.copy(),
                 region_key="region", region=region, index=i,
